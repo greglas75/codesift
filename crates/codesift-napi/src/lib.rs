@@ -4,7 +4,7 @@
 mod sqlite_compat;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use codesift_core::bm25;
 use codesift_core::store::{self, StoreError, SymbolQuery};
@@ -297,18 +297,30 @@ pub struct Bm25HitJs {
 /// A BM25 index held in Rust memory, outside the V8 heap. Ingestion is driven in batches by the JS
 /// builder: `ingestAsync` tokenises a batch in parallel off the main thread (only converting the
 /// symbols' strings in happens on it); a search over the postings is milliseconds and stays sync.
+///
+/// A read-write lock: searches and a background save both only read, so saving a large index never
+/// holds up a search on it; ingestion and updates write.
 #[napi]
 pub struct NativeBm25 {
-    inner: Arc<Mutex<bm25::Bm25>>,
+    inner: Arc<RwLock<bm25::Bm25>>,
+    /// The header a persisted index was saved with, when this one was loaded (`loadBm25`).
+    header: Option<String>,
 }
 
-fn lock(m: &Mutex<bm25::Bm25>) -> napi::Result<std::sync::MutexGuard<'_, bm25::Bm25>> {
-    m.lock()
-        .map_err(|_| napi::Error::new(Status::GenericFailure, "bm25 lock poisoned"))
+fn poisoned() -> napi::Error {
+    napi::Error::new(Status::GenericFailure, "bm25 lock poisoned")
+}
+
+fn read(m: &RwLock<bm25::Bm25>) -> napi::Result<std::sync::RwLockReadGuard<'_, bm25::Bm25>> {
+    m.read().map_err(|_| poisoned())
+}
+
+fn write(m: &RwLock<bm25::Bm25>) -> napi::Result<std::sync::RwLockWriteGuard<'_, bm25::Bm25>> {
+    m.write().map_err(|_| poisoned())
 }
 
 pub struct IngestTask {
-    inner: Arc<Mutex<bm25::Bm25>>,
+    inner: Arc<RwLock<bm25::Bm25>>,
     batch: Vec<bm25::SymbolInput>,
 }
 
@@ -318,7 +330,7 @@ impl Task for IngestTask {
 
     fn compute(&mut self) -> napi::Result<()> {
         let prepared = codesift_core::bm25::prepare_batch(&self.batch);
-        lock(&self.inner)?.ingest_build_prepared(prepared);
+        write(&self.inner)?.ingest_build_prepared(prepared);
         Ok(())
     }
 
@@ -332,7 +344,8 @@ impl NativeBm25 {
     #[napi(constructor)]
     pub fn new() -> Self {
         NativeBm25 {
-            inner: Arc::new(Mutex::new(bm25::Bm25::new())),
+            inner: Arc::new(RwLock::new(bm25::Bm25::new())),
+            header: None,
         }
     }
 
@@ -340,7 +353,7 @@ impl NativeBm25 {
     #[napi]
     pub fn ingest(&self, symbols: Vec<Bm25SymbolJs>) -> napi::Result<()> {
         let batch: Vec<bm25::SymbolInput> = symbols.into_iter().map(Into::into).collect();
-        lock(&self.inner)?.ingest_build(&batch);
+        write(&self.inner)?.ingest_build(&batch);
         Ok(())
     }
 
@@ -356,7 +369,7 @@ impl NativeBm25 {
     /// End of a build: resolves import centrality over every file seen.
     #[napi]
     pub fn finish(&self) -> napi::Result<()> {
-        lock(&self.inner)?.finish();
+        write(&self.inner)?.finish();
         Ok(())
     }
 
@@ -371,7 +384,7 @@ impl NativeBm25 {
         let w: [f64; bm25::FIELD_COUNT] = weights.try_into().map_err(|_| {
             napi::Error::new(Status::InvalidArg, "weights must have exactly 5 entries")
         })?;
-        Ok(lock(&self.inner)?
+        Ok(read(&self.inner)?
             .search(&query, top_k as usize, &w)
             .into_iter()
             .map(|h| Bm25HitJs {
@@ -385,25 +398,109 @@ impl NativeBm25 {
     #[napi]
     pub fn update_file(&self, file: String, symbols: Vec<Bm25SymbolJs>) -> napi::Result<()> {
         let batch: Vec<bm25::SymbolInput> = symbols.into_iter().map(Into::into).collect();
-        lock(&self.inner)?.update_file(&file, &batch);
+        write(&self.inner)?.update_file(&file, &batch);
         Ok(())
     }
 
     /// `[file, score]` for every file with a non-zero import centrality.
     #[napi]
     pub fn centrality(&self) -> napi::Result<Vec<(String, f64)>> {
-        Ok(lock(&self.inner)?.centrality_entries())
+        Ok(read(&self.inner)?.centrality_entries())
     }
 
     #[napi(getter)]
     pub fn doc_count(&self) -> napi::Result<i64> {
-        Ok(lock(&self.inner)?.doc_count())
+        Ok(read(&self.inner)?.doc_count())
     }
 
     #[napi]
     pub fn footprint_bytes(&self) -> napi::Result<f64> {
-        Ok(lock(&self.inner)?.footprint_bytes() as f64)
+        Ok(read(&self.inner)?.footprint_bytes() as f64)
     }
+
+    /// Write the index to `path` off the main thread (temp file, then rename), with `header` — the
+    /// caller's staleness record — up front. Searches keep running while it serialises.
+    #[napi]
+    pub fn save_async(&self, path: String, header: String) -> AsyncTask<SaveBm25Task> {
+        AsyncTask::new(SaveBm25Task {
+            inner: Arc::clone(&self.inner),
+            path: PathBuf::from(path),
+            header,
+        })
+    }
+
+    /// The header this index was saved with, when it came from `loadBm25`; null for a built one.
+    #[napi(getter)]
+    pub fn loaded_header(&self) -> Option<String> {
+        self.header.clone()
+    }
+}
+
+pub struct SaveBm25Task {
+    inner: Arc<RwLock<bm25::Bm25>>,
+    path: PathBuf,
+    header: String,
+}
+
+impl Task for SaveBm25Task {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> napi::Result<()> {
+        let bytes = read(&self.inner)?.to_bytes(&self.header);
+        let mut tmp = self.path.clone().into_os_string();
+        tmp.push(format!(".tmp.{}", std::process::id()));
+        let tmp = PathBuf::from(tmp);
+        let written = std::fs::write(&tmp, &bytes).and_then(|_| std::fs::rename(&tmp, &self.path));
+        if let Err(e) = written {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(napi::Error::new(
+                Status::GenericFailure,
+                format!("bm25 save: {e}"),
+            ));
+        }
+        Ok(())
+    }
+
+    fn resolve(&mut self, _env: Env, _out: ()) -> napi::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct LoadBm25Task {
+    path: PathBuf,
+}
+
+impl Task for LoadBm25Task {
+    type Output = (bm25::Bm25, String);
+    type JsValue = NativeBm25;
+
+    fn compute(&mut self) -> napi::Result<(bm25::Bm25, String)> {
+        let bytes = std::fs::read(&self.path)
+            .map_err(|e| napi::Error::new(Status::GenericFailure, format!("bm25 load: {e}")))?;
+        bm25::Bm25::from_bytes(&bytes)
+            .map_err(|e| napi::Error::new(Status::InvalidArg, format!("bm25 load: {e}")))
+    }
+
+    fn resolve(
+        &mut self,
+        _env: Env,
+        (ix, header): (bm25::Bm25, String),
+    ) -> napi::Result<NativeBm25> {
+        Ok(NativeBm25 {
+            inner: Arc::new(RwLock::new(ix)),
+            header: Some(header),
+        })
+    }
+}
+
+/// A persisted index (`saveAsync`), read and validated off the main thread. Rejects a missing,
+/// truncated or foreign file, or one of another format version.
+#[napi]
+pub fn load_bm25(path: String) -> AsyncTask<LoadBm25Task> {
+    AsyncTask::new(LoadBm25Task {
+        path: PathBuf::from(path),
+    })
 }
 
 impl Default for NativeBm25 {

@@ -186,6 +186,7 @@ export const ARTIFACT_SUFFIXES = [
   "chunk-embeddings.ndjson",
   "bm25.json",
   "bm25.ndjson",
+  "bm25n.bin",
   "import-edges.ndjson",
   "graph.json",
   "snapshot.json",

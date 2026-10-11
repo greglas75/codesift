@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 21;
+export const NATIVE_ABI = 22;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -90,6 +90,10 @@ export interface NativeBm25Handle {
   centrality(): Array<[string, number]>;
   readonly docCount: number;
   footprintBytes(): number;
+  /** Write the index to `path` off the main thread (temp + rename), `header` up front. */
+  saveAsync(path: string, header: string): Promise<void>;
+  /** The header a persisted index was saved with, when it came from `loadBm25`; null when built. */
+  readonly loadedHeader: string | null;
 }
 
 /** One file's extraction (ADR-006 stage 3). */
@@ -173,6 +177,8 @@ export interface NativeCore {
   indexMeta(dbPath: string): Promise<NativeIndexMeta | null>;
   openSnapshot(dbPath: string): Promise<NativeSymbolSnapshot>;
   NativeBm25: new () => NativeBm25Handle;
+  /** A persisted native BM25 index (`saveAsync`); rejects a missing, damaged or other-format file. */
+  loadBm25(path: string): Promise<NativeBm25Handle>;
   /** Open a transaction that replaces the whole index (stage 1, write half). */
   beginIndexWrite(dbPath: string): Promise<NativeIndexWriter>;
   /** Parse and extract one file off the main thread (every language with a tree-sitter grammar: TS/TSX/JS, Python, Go, Rust, PHP, Kotlin, Gradle KTS, Java, Ruby, CSS). */

@@ -451,10 +451,15 @@ async function buildNativeBM25(Ctor: new () => NativeBm25Handle, symbols: CodeSy
     for (const symbol of batch) symbolMap.set(symbol.id, symbol);
   }
   native.finish();
+  return wrapNativeBM25(native, symbolMap);
+}
+
+/** The `BM25Index` view of a native handle — built, or loaded from disk (`bm25-native-store.ts`). */
+export function wrapNativeBM25(native: NativeBm25Handle, symbols: Map<string, CodeSymbol>): NativeBM25Index {
   let centrality: Map<string, number> | undefined;
   return {
     native,
-    symbols: symbolMap,
+    symbols,
     get docCount() {
       return native.docCount;
     },

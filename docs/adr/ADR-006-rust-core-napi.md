@@ -1,6 +1,6 @@
 # ADR-006: Rust core behind napi-rs — storage, BM25 and parsing move; the MCP layer and tools stay
 
-**Status:** Completed 2026-10-10 (stages 0–7 done, the native store on by default; 8 and 10 declined on measurement; 9 declined on conversation indexes, reopened for the owner by a code-index measurement — see Closing; the TypeScript paths stay permanently as the fallback)
+**Status:** Completed 2026-10-10, stage 9 added 2026-10-11 (stages 0–7 and 9 done, the native store on by default; 8 and 10 declined on measurement; the TypeScript paths stay permanently as the fallback)
 **Date:** 2026-10-08 | **Deciders:** Greg Laski | **Area:** Infra/Language
 **Partially supersedes:** ADR-001 (the TypeScript choice stands for the server and the tools; the
 "no native bindings" consequence does not)
@@ -770,4 +770,29 @@ where the native build beat loading a persisted file. On a 1.43M-symbol code ind
 TypeScript engine took 69 s), and every worktree of that repo is its own index: usage.jsonl for
 2026-10-09..10 has 28 of 78 such calls above 5 s. Persisting the native index would remove the build
 half. That is an owner decision, recorded here with its numbers.
+
+## Stage 9, reopened — the native BM25 index persists (2026-10-11)
+
+The owner took the measurement above. The Rust index is written whole (`Bm25::to_bytes`, ABI 22) to
+`<hash>.bm25n.bin` after a build that took at least a second, and loaded in place of the next build.
+What the TypeScript sidecar could not carry — each key's token list, which exact removal needs — is
+not written either: it is exactly the key's posting memberships minus its stale pairs, so the load
+derives it. The first fixed-width layout wrote 856 MB for one 1.43M-symbol index; varints, the derived
+token lists and ids stored without their `<repo>:<file>:` prefix bring it to **285 MB**.
+
+Staleness is per file. The header records each file's mtime and symbol count; on load the files that
+differ are re-applied with `update_file` — what the live daemon does after an edit — and an index whose
+files changed for more than half, or that another codesift version or extractor wrote, is rebuilt.
+
+Measured on that index, a fresh process each time, identical top results:
+
+| first `search_symbols` | |
+|---|---:|
+| build (no file yet) | 17.4–27.5 s, then saved |
+| loaded, previous fixed-width layout | 10.5 s |
+| **loaded, compact layout** | **6.4 s** |
+
+Most of what remains is reading the symbols themselves (6.4 s measured earlier for the whole index);
+the BM25 half is now a load. Disk: one file per large index, reclaimed by `prune` with the rest of a
+repo's artifacts.
 

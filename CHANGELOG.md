@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **The native BM25 index is saved and reloaded** instead of being rebuilt on every cold start
+  (`<hash>.bm25n.bin`, written after a build that took over a second). A file edited since the save is
+  re-applied on load; a different codesift version or extractor rebuilds. On a 1.43M-symbol index the
+  first `search_symbols` drops from 17–27 s to 6.4 s, for a 285 MB file.
+
 ## [0.22.0] — 2026-10-10
 
 The Rust core is complete (ADR-006) and its store is now on by default. With a platform package

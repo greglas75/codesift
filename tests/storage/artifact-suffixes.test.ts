@@ -4,6 +4,7 @@ import { ARTIFACT_SUFFIXES, artifactPattern, writerPidIsAlive } from "../../src/
 import { getChunkPath, getChunkEmbeddingPath } from "../../src/storage/chunk-store.js";
 import { sqlitePathFor, getIndexPath } from "../../src/storage/index-store.js";
 import { getPartialEmbeddingPath } from "../../src/storage/embedding-store.js";
+import { nativeBm25PathFor } from "../../src/search/bm25-native-store.js";
 
 /**
  * `prune` reclaims a file only when it matches `<hash>.<known suffix>`, so a suffix the
@@ -32,6 +33,8 @@ describe("prune recognises every artifact the storage layer creates", () => {
       INDEX_PATH.replace(/\.index\.json$/, ".embeddings.meta.json"),
       getPartialEmbeddingPath(INDEX_PATH),
       INDEX_PATH.replace(/\.index\.json$/, ".snapshot.json"),
+      nativeBm25PathFor(INDEX_PATH),
+      `${nativeBm25PathFor(INDEX_PATH)}.tmp.12345`,
     ];
     for (const p of produced) {
       expect(re.test(basename(p)), `prune would not reclaim ${basename(p)}`).toBe(true);

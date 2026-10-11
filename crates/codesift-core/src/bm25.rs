@@ -638,6 +638,306 @@ impl Bm25 {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Persistence
+// ---------------------------------------------------------------------------------------------
+
+/// `CSBM25N` + NUL. A persisted native index — never the TypeScript `.bm25.ndjson`, whose v2 format
+/// cannot carry what exact removal needs.
+const MAGIC: &[u8; 8] = b"CSBM25N\0";
+/// Bump on any change to the layout below; a file of another version is rejected, never guessed at.
+pub const PERSIST_FORMAT: u32 = 1;
+
+// Compactness is the point of the layout: the first fixed-width version wrote 856 MB for one
+// 1.43M-symbol index, and a repo with thirty worktrees has thirty of them. Three things carry it:
+//  * integers are LEB128 varints (a key position fits in 3 bytes, a term frequency nearly always in 1);
+//  * a key's token list is NOT written — it is exactly the (field, token) pairs whose postings name the
+//    key, minus its stale pairs, so the load derives it (stale pairs are written; nearly always none);
+//  * an id `<repo>:<file>:<rest>` whose file is the key's own is written as `<rest>` alone.
+
+struct Writer(Vec<u8>);
+
+impl Writer {
+    fn u8(&mut self, v: u8) {
+        self.0.push(v);
+    }
+    fn var(&mut self, mut v: u64) {
+        while v >= 0x80 {
+            self.0.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        self.0.push(v as u8);
+    }
+    fn f64(&mut self, v: f64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn str(&mut self, s: &str) {
+        self.var(s.len() as u64);
+        self.0.extend_from_slice(s.as_bytes());
+    }
+}
+
+struct Reader<'a> {
+    buf: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+        let end = self
+            .at
+            .checked_add(n)
+            .filter(|&e| e <= self.buf.len())
+            .ok_or_else(|| format!("truncated at byte {} (wanted {n} more)", self.at))?;
+        let out = &self.buf[self.at..end];
+        self.at = end;
+        Ok(out)
+    }
+    fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+    fn var(&mut self) -> Result<u64, String> {
+        let mut v: u64 = 0;
+        for shift in (0..64).step_by(7) {
+            let b = self.u8()?;
+            v |= u64::from(b & 0x7f) << shift;
+            if b & 0x80 == 0 {
+                return Ok(v);
+            }
+        }
+        Err(format!("varint longer than 64 bits at byte {}", self.at))
+    }
+    fn var_u32(&mut self) -> Result<u32, String> {
+        u32::try_from(self.var()?).map_err(|_| format!("value over u32 at byte {}", self.at))
+    }
+    fn var_i64(&mut self) -> Result<i64, String> {
+        let z = self.var()?;
+        Ok(((z >> 1) as i64) ^ -((z & 1) as i64))
+    }
+    fn f64(&mut self) -> Result<f64, String> {
+        Ok(f64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+    /// A count, checked against the bytes left so a corrupt length cannot ask for a huge allocation.
+    fn count(&mut self) -> Result<usize, String> {
+        let n = self.var()? as usize;
+        if n > self.buf.len() - self.at {
+            return Err(format!("count {n} at byte {} exceeds the file", self.at));
+        }
+        Ok(n)
+    }
+    fn str(&mut self) -> Result<String, String> {
+        let n = self.count()?;
+        String::from_utf8(self.take(n)?.to_vec()).map_err(|e| e.to_string())
+    }
+}
+
+fn zigzag(v: i64) -> u64 {
+    ((v << 1) ^ (v >> 63)) as u64
+}
+
+/// The `<repo>` part of `<repo>:<file>:<rest>` for a key, when its id has that shape.
+fn repo_prefix<'a>(id: &'a str, file: &str) -> Option<&'a str> {
+    let needle = format!(":{file}:");
+    id.find(&needle).map(|at| &id[..at])
+}
+
+impl Bm25 {
+    /// The whole index as bytes, with `header` (opaque to Rust — the caller's staleness record) up
+    /// front. Postings are written sorted by token, so equal indexes produce equal files. Only a
+    /// finished index is meaningful: build-time pending imports are not carried.
+    pub fn to_bytes(&self, header: &str) -> Vec<u8> {
+        let mut w = Writer(Vec::with_capacity(self.footprint_bytes() / 4));
+        w.0.extend_from_slice(MAGIC);
+        w.var(u64::from(PERSIST_FORMAT));
+        w.var(FIELD_COUNT as u64);
+        w.str(header);
+        w.var(self.vocab.len() as u64);
+        for t in &self.vocab {
+            w.str(t);
+        }
+        w.var(self.files.len() as u64);
+        for (f, &c) in self.files.iter().zip(&self.centrality) {
+            w.str(f);
+            w.f64(c);
+        }
+        let prefix = self
+            .keys
+            .first()
+            .and_then(|k| repo_prefix(&k.id, &self.files[k.file as usize]))
+            .unwrap_or("");
+        w.str(prefix);
+        w.var(self.keys.len() as u64);
+        for k in &self.keys {
+            let file = &self.files[k.file as usize];
+            let short = format!("{prefix}:{file}:");
+            match k.id.strip_prefix(short.as_str()) {
+                Some(rest) => {
+                    w.u8(1 | (u8::from(k.alive) << 1));
+                    w.str(rest);
+                }
+                None => {
+                    w.u8(u8::from(k.alive) << 1);
+                    w.str(&k.id);
+                }
+            }
+            w.var(u64::from(k.file));
+            for &l in &k.lengths {
+                w.var(u64::from(l));
+            }
+            w.var(k.stale.len() as u64);
+            for &p in &k.stale {
+                w.var(u64::from(p));
+            }
+        }
+        for field in &self.postings {
+            let mut tids: Vec<&u32> = field.keys().collect();
+            tids.sort_unstable();
+            w.var(tids.len() as u64);
+            let mut prev = 0u32;
+            for tid in tids {
+                let list = &field[tid];
+                w.var(u64::from(tid - prev));
+                prev = *tid;
+                w.var(list.len() as u64);
+                for &(key, tf) in list {
+                    w.var(u64::from(key));
+                    w.var(u64::from(tf));
+                }
+            }
+        }
+        for &t in &self.total_field_lengths {
+            w.var(zigzag(t));
+        }
+        w.var(zigzag(self.doc_count));
+        w.0
+    }
+
+    /// The index `to_bytes` wrote, and its header. Every count is bounds-checked and every index
+    /// into vocab, keys and files is validated, so a truncated or foreign file is an `Err` — never a
+    /// panic, and never an index that answers differently from the one that was saved.
+    pub fn from_bytes(buf: &[u8]) -> Result<(Bm25, String), String> {
+        let mut r = Reader { buf, at: 0 };
+        if r.take(8)? != MAGIC {
+            return Err("not a persisted native bm25 index".into());
+        }
+        let format = r.var_u32()?;
+        if format != PERSIST_FORMAT {
+            return Err(format!(
+                "format {format}, this build reads {PERSIST_FORMAT}"
+            ));
+        }
+        let fields = r.var()? as usize;
+        if fields != FIELD_COUNT {
+            return Err(format!("{fields} fields, this build has {FIELD_COUNT}"));
+        }
+        let header = r.str()?;
+
+        let mut ix = Bm25::new();
+        for _ in 0..r.count()? {
+            let t = r.str()?;
+            ix.vocab_ids.insert(t.clone(), ix.vocab.len() as u32);
+            ix.vocab.push(t);
+        }
+        for _ in 0..r.count()? {
+            let f = r.str()?;
+            ix.file_ids.insert(f.clone(), ix.files.len() as u32);
+            ix.files.push(f);
+            ix.centrality.push(r.f64()?);
+        }
+        let n_vocab = ix.vocab.len() as u32;
+        let packed_ok =
+            |p: u32| ((p >> FIELD_SHIFT) as usize) < FIELD_COUNT && (p & TOKEN_MASK) < n_vocab;
+        let prefix = r.str()?;
+        for _ in 0..r.count()? {
+            let flags = r.u8()?;
+            let stored = r.str()?;
+            let file = r.var_u32()?;
+            if file as usize >= ix.files.len() {
+                return Err(format!(
+                    "key {stored:?} names file {file} of {}",
+                    ix.files.len()
+                ));
+            }
+            let id = if flags & 1 == 1 {
+                format!("{prefix}:{}:{stored}", ix.files[file as usize])
+            } else {
+                stored
+            };
+            let mut lengths = [0u32; FIELD_COUNT];
+            for l in lengths.iter_mut() {
+                *l = r.var_u32()?;
+            }
+            let n_stale = r.count()?;
+            let mut stale = Vec::with_capacity(n_stale);
+            for _ in 0..n_stale {
+                let p = r.var_u32()?;
+                if !packed_ok(p) {
+                    return Err(format!("key {id:?} names a token outside the vocabulary"));
+                }
+                stale.push(p);
+            }
+            ix.key_ids.insert(id.clone(), ix.keys.len() as u32);
+            ix.keys.push(Key {
+                id,
+                alive: flags & 2 == 2,
+                file,
+                lengths,
+                tokens: Vec::new(),
+                stale,
+            });
+        }
+        let n_keys = ix.keys.len() as u32;
+        for f in 0..FIELD_COUNT {
+            let mut tid = 0u32;
+            for _ in 0..r.count()? {
+                tid = tid
+                    .checked_add(r.var_u32()?)
+                    .filter(|&t| t < n_vocab)
+                    .ok_or_else(|| format!("posting token outside the vocabulary of {n_vocab}"))?;
+                let n = r.count()?;
+                let mut list = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let key = r.var_u32()?;
+                    let tf = r.var_u32()?;
+                    if key >= n_keys {
+                        return Err(format!("posting names key {key} of {n_keys}"));
+                    }
+                    list.push((key, tf));
+                }
+                ix.postings[f].insert(tid, list);
+            }
+        }
+        for t in ix.total_field_lengths.iter_mut() {
+            *t = r.var_i64()?;
+        }
+        ix.doc_count = r.var_i64()?;
+        if r.at != buf.len() {
+            return Err(format!("{} trailing bytes", buf.len() - r.at));
+        }
+        ix.derive_key_tokens();
+        Ok((ix, header))
+    }
+
+    /// Each key's token list from the postings: every (field, token) whose list names the key, less
+    /// the key's stale pairs. Field-major, tokens ascending — the order removal and the presence check
+    /// read it in does not matter, only the set does.
+    fn derive_key_tokens(&mut self) {
+        for f in 0..FIELD_COUNT {
+            let mut tids: Vec<u32> = self.postings[f].keys().copied().collect();
+            tids.sort_unstable();
+            for tid in tids {
+                let packed = ((f as u32) << FIELD_SHIFT) | tid;
+                for &(key, _) in &self.postings[f][&tid] {
+                    let k = &mut self.keys[key as usize];
+                    if k.stale.is_empty() || !k.stale.contains(&packed) {
+                        k.tokens.push(packed);
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -816,5 +1116,116 @@ mod tests {
         assert_eq!(ids(&idx), vec!["a", "b"]);
         idx.update_file("a.ts", &[sym("a", "a.ts", "same", "")]);
         assert_eq!(ids(&idx), vec!["b", "a"]);
+    }
+
+    fn build(symbols: &[SymbolInput]) -> Bm25 {
+        let mut ix = Bm25::new();
+        ix.ingest_build(symbols);
+        ix.finish();
+        ix
+    }
+
+    fn corpus() -> Vec<SymbolInput> {
+        vec![
+            sym(
+                "r:a.ts:createUser:1",
+                "a.ts",
+                "createUser",
+                "function createUser() { import x from './b'; }",
+            ),
+            sym(
+                "r:b.ts:UserModel:1",
+                "b.ts",
+                "UserModel",
+                "class UserModel { /* the user */ save() {} }",
+            ),
+            sym(
+                "r:b.ts:UserModel:1",
+                "b.ts",
+                "UserModel",
+                "class UserModel { load() {} }",
+            ), // id collision
+            sym(
+                "r:c.test.ts:spec:1",
+                "c.test.ts",
+                "spec",
+                "it('creates a user', () => createUser())",
+            ),
+            sym("r:d.ts:Zażółć:1", "d.ts", "Zażółć", "const gęślą = 'jaźń';"),
+            // An id that does not follow `<repo>:<file>:…` is written whole.
+            sym("synthetic-user-id", "e.ts", "userRoute", "route('/user')"),
+        ]
+    }
+
+    fn answers(ix: &Bm25) -> Vec<Vec<Hit>> {
+        [
+            "user",
+            "create user",
+            "save",
+            "load",
+            "jaźń",
+            "spec",
+            "absent",
+        ]
+        .iter()
+        .map(|q| ix.search(q, 10, &W))
+        .collect()
+    }
+
+    // Bug it catches: a loaded index that ranks differently from the one saved — stale tokens of a
+    // collided id, posting order (tie-breaks), centrality or field lengths lost in the round trip.
+    #[test]
+    fn a_saved_index_loads_back_answering_identically() {
+        let ix = build(&corpus());
+        let (loaded, header) = Bm25::from_bytes(&ix.to_bytes("{\"h\":1}")).unwrap();
+        assert_eq!(header, "{\"h\":1}");
+        assert_eq!(answers(&loaded), answers(&ix));
+        assert_eq!(loaded.doc_count(), ix.doc_count());
+        assert_eq!(loaded.centrality_entries(), ix.centrality_entries());
+    }
+
+    // Bug it catches: exact removal after a load — update_file needs each key's token list, which the
+    // TypeScript sidecar never carried.
+    #[test]
+    fn an_update_after_loading_matches_the_same_update_without_saving() {
+        let mut ix = build(&corpus());
+        let (mut loaded, _) = Bm25::from_bytes(&ix.to_bytes("")).unwrap();
+        let replacement = [sym(
+            "r:b.ts:Account:1",
+            "b.ts",
+            "Account",
+            "class Account { save() {} }",
+        )];
+        ix.update_file("b.ts", &replacement);
+        loaded.update_file("b.ts", &replacement);
+        assert_eq!(answers(&loaded), answers(&ix));
+        assert_eq!(loaded.doc_count(), ix.doc_count());
+        // A second round trip of the updated index still answers the same.
+        let (again, _) = Bm25::from_bytes(&loaded.to_bytes("")).unwrap();
+        assert_eq!(answers(&again), answers(&ix));
+    }
+
+    #[test]
+    fn equal_indexes_write_equal_files() {
+        assert_eq!(
+            build(&corpus()).to_bytes("h"),
+            build(&corpus()).to_bytes("h")
+        );
+    }
+
+    // Bug it catches: a truncated or foreign file panicking, or loading as a different index.
+    #[test]
+    fn a_damaged_file_is_an_error_not_a_panic() {
+        let bytes = build(&corpus()).to_bytes("h");
+        for cut in [0, 7, 12, bytes.len() / 2, bytes.len() - 1] {
+            assert!(Bm25::from_bytes(&bytes[..cut]).is_err(), "cut at {cut}");
+        }
+        let mut extra = bytes.clone();
+        extra.push(0);
+        assert!(Bm25::from_bytes(&extra).is_err());
+        let mut other_format = bytes.clone();
+        other_format[8] ^= 0xff;
+        assert!(Bm25::from_bytes(&other_format).is_err());
+        assert!(Bm25::from_bytes(b"{\"format\":2}").is_err());
     }
 }

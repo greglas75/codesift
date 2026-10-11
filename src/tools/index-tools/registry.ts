@@ -16,6 +16,8 @@ import {
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import { assessOverload, DaemonOverloadedError } from "./overload-guard.js";
 import { loadBM25Index, saveBM25Index } from "../../search/bm25-store.js";
+import { loadNativeBM25, saveNativeBM25 } from "../../search/bm25-native-store.js";
+import { getNativeCore } from "../../native/index.js";
 import { findSymbols, streamSymbols } from "../../storage/index-store.js";
 import type { SymbolQuery } from "../../storage/sqlite/queries.js";
 import { withIndexLoadSlot } from "./load-gate.js";
@@ -35,7 +37,7 @@ import {
 import { getChunkPath, getChunkEmbeddingPath } from "../../storage/chunk-store.js";
 import { getGraphPath } from "../../storage/graph-store.js";
 import { getSnapshotPath } from "../../storage/hash-snapshot.js";
-import { buildBM25IndexYielding, nativeBM25Enabled } from "../../search/bm25.js";
+import { buildBM25IndexYielding, isNativeBM25 } from "../../search/bm25.js";
 import type { BM25Index } from "../../search/bm25.js";
 import { loadConfig, localEmbeddingsDisabled, embeddingMemBudgetBytes } from "../../config.js";
 import { ensureIndexFresh } from "./file-indexer.js";
@@ -137,7 +139,12 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   // a rebuild is 10.04 s, reconstructing the same maps from the sidecar is 0.70 s. The expensive
   // half of a build is tokenising every symbol, and that result does not change until the index
   // does — so it is worth writing down. A stale or unreadable sidecar returns null and we rebuild.
-  const restored = nativeBM25Enabled() ? null : await loadBM25Index(meta.index_path, index);
+  // The native index persists in its own format (bm25-native-store.ts): the TypeScript sidecar cannot
+  // carry the token lists a native index needs for exact removal.
+  const nativeCore = getNativeCore("bm25");
+  const restored = nativeCore
+    ? await loadNativeBM25(nativeCore, meta.index_path, index)
+    : await loadBM25Index(meta.index_path, index);
   if (restored) {
     rememberBM25Index(resolvedName, restored);
     return restored;
@@ -156,7 +163,8 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   if (buildMs >= BM25_PERSIST_MIN_BUILD_MS) {
     // Not awaited: the caller has a working index in memory, and making the first search wait on a
     // cache write would spend the very seconds this exists to save.
-    void saveBM25Index(meta.index_path, bm25, index).catch(() => {});
+    void (isNativeBM25(bm25) ? saveNativeBM25(bm25, meta.index_path, index) : saveBM25Index(meta.index_path, bm25, index))
+      .catch(() => {});
   }
   return bm25;
 }

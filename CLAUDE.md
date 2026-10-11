@@ -1,7 +1,7 @@
 ## Tech Stack
 TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
 
-## Rust core (ADR-006 — stages 0–7 done, store on by default since 2026-10-10; 8, 9, 10 no-go)
+## Rust core (ADR-006 — stages 0–7 and 9 done, store on by default since 2026-10-10; 8, 10 no-go)
 
 Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
 `crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every
@@ -40,6 +40,10 @@ component keeps its TS implementation; the binary is OPTIONAL.
   in JS). Heap retained on a 353k-symbol repo 400 → 14 MB, conversation index 870 → 7 MB. Parity:
   `scripts/native-bm25-parity.ts <copy.db>` (0 diffs on 5 indexes). Conversation persistence keeps the
   TS engine (`{ engine: "ts" }`) because incremental passes amend its sidecar.
+  **Stage 9 (reopened 2026-10-11):** the native index persists as `<hash>.bm25n.bin` (`Bm25::to_bytes`,
+  `bm25-native-store.ts`), staleness per file (mtime + symbol count, changed files re-applied with
+  `update_file`), rebuilt on another codesift version or extractor. 1.43M-symbol index: 285 MB, cold first
+  search 6.4 s instead of 17–27 s.
 - **Stage 3 (parser: TS/TSX/JS, Python, Go, Rust, PHP, Kotlin, Gradle KTS — every tree-sitter extractor):** `runTreeSitterParse` → `extractSymbols` in Rust
   (`crates/codesift-core/src/extract/ts.rs`, a 1:1 port). tree-sitter `=0.26.11` (= web-tree-sitter),
   grammars `=0.23.2`/`=0.23.1` (= the shipped .wasm, verified by hash). Everything positional is UTF-16
