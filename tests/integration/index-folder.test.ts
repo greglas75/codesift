@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { indexFolder, indexFile, listAllRepos, invalidateCache, getCodeIndex, getBM25Index } from "../../src/tools/index-tools.js";
-import { searchBM25 } from "../../src/search/bm25.js";
+import { searchBM25Async } from "../../src/search/bm25.js";
 import { resetConfigCache } from "../../src/config.js";
 import { resetSecretCache } from "../../src/tools/secret-tools.js";
 
@@ -122,7 +122,7 @@ describe("index_folder integration", () => {
     expect(bm25!.docCount).toBeGreaterThan(0);
 
     // Search for a symbol by name
-    const results = searchBM25(bm25!, "getUserById", 5, FIELD_WEIGHTS);
+    const results = await searchBM25Async(bm25!, "getUserById", 5, FIELD_WEIGHTS);
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]!.symbol.name).toBe("getUserById");
   });
@@ -135,7 +135,7 @@ describe("index_folder integration", () => {
     expect(bm25).not.toBeNull();
 
     // "payment" should match processPayment
-    const results = searchBM25(bm25!, "payment", 5, FIELD_WEIGHTS);
+    const results = await searchBM25Async(bm25!, "payment", 5, FIELD_WEIGHTS);
     expect(results.length).toBeGreaterThan(0);
     const names = results.map((r) => r.symbol.name);
     expect(names).toContain("processPayment");

@@ -31,7 +31,7 @@ describe("filesToReapply", () => {
   const header = (files: Array<[string, string]>, extra: Partial<{ codesift: string; extractor: string; format: number }> = {}) => ({
     format: 1,
     codesift: (createRequire(import.meta.url)("../../package.json") as { version: string }).version,
-    extractor: JSON.stringify({ typescript: 3 }),
+    extractor: JSON.stringify([["typescript", "3"]]),
     files,
     ...extra,
   });
@@ -47,7 +47,7 @@ describe("filesToReapply", () => {
   // Bug it catches: tokens from another extractor or codesift version served from a file whose
   // mtimes all still match.
   it.each([
-    ["another extractor", { extractor: JSON.stringify({ typescript: 4 }) }],
+    ["another extractor", { extractor: JSON.stringify([["typescript", "4"]]) }],
     ["another codesift version", { codesift: "0.0.1" }],
     ["another header format", { format: 2 }],
   ])("rebuilds after %s", (_case, extra) => {

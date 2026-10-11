@@ -792,7 +792,23 @@ Measured on that index, a fresh process each time, identical top results:
 | loaded, previous fixed-width layout | 10.5 s |
 | **loaded, compact layout** | **6.4 s** |
 
-Most of what remains is reading the symbols themselves (6.4 s measured earlier for the whole index);
-the BM25 half is now a load. Disk: one file per large index, reclaimed by `prune` with the rest of a
-repo's artifacts.
+Disk: one file per large index, reclaimed by `prune` with the rest of a repo's artifacts.
+
+### The code index stops holding its symbols
+
+What remained of those 6.4 s was `loadIndex`: 4.1 s and **+2.4 GB of heap** to fill the JS map of every
+symbol that the native index kept beside itself — more than the Rust index (1.6 GB), and invisible to
+the BM25 budget, which prices only the Rust half. A native code index is now store-backed: it holds no
+symbols, a search reads its hits from the store by id (`searchBM25Async`; a colliding id resolves to its
+last row in index order, the entry an index-ordered map held), a build streams symbols from the store
+into Rust, and a load needs only the summary plus the symbols of files changed since the save. The index
+child also writes the native file now — its sidecar writer skipped native indexes, so the daemon rebuilt
+on its first search after every out-of-process reindex. Conversation and tool-ranker indexes keep their
+small in-memory maps.
+
+| first `search_symbols`, same index, fresh process | time | RSS |
+|---|---:|---:|
+| build, symbols in JS (before stage 9) | 27.5 s | 4.6 GB |
+| loaded, symbols in JS | 6.4 s | 4.5 GB |
+| **loaded, store-backed** | **1.9 s** | **2.2 GB** |
 

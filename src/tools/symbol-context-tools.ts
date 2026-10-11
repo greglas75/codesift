@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { loadConfig } from "../config.js";
-import { searchBM25 } from "../search/bm25.js";
+import { searchBM25Async } from "../search/bm25.js";
 import type { CodeSymbol, Reference, SymbolKind } from "../types.js";
 import { extractHookNames, REACT_STDLIB_HOOKS } from "./react-tools.js";
 import {
@@ -81,7 +81,7 @@ export async function findAndShow(
 > {
   const bm25Index = await requireBM25Index(repo);
   const config = loadConfig();
-  const results = searchBM25(bm25Index, query, 1, config.bm25FieldWeights);
+  const results = await searchBM25Async(bm25Index, query, 1, config.bm25FieldWeights);
 
   const topResult = results[0];
   if (!topResult) return null;
@@ -146,7 +146,7 @@ export async function getContextBundle(
 ): Promise<ContextBundle | null> {
   const bm25Index = await requireBM25Index(repo);
   const config = loadConfig();
-  const results = searchBM25(bm25Index, symbolName, 1, config.bm25FieldWeights);
+  const results = await searchBM25Async(bm25Index, symbolName, 1, config.bm25FieldWeights);
   const topResult = results[0];
   if (!topResult) return null;
 

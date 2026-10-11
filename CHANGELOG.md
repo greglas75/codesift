@@ -6,8 +6,11 @@
 
 - **The native BM25 index is saved and reloaded** instead of being rebuilt on every cold start
   (`<hash>.bm25n.bin`, written after a build that took over a second). A file edited since the save is
-  re-applied on load; a different codesift version or extractor rebuilds. On a 1.43M-symbol index the
-  first `search_symbols` drops from 17–27 s to 6.4 s, for a 285 MB file.
+  re-applied on load; a different codesift version or extractor rebuilds.
+- **Code indexes no longer keep every symbol in memory for search.** Hits are read from the index by
+  id. On a 1.43M-symbol index the first `search_symbols` drops from 27.5 s to 1.9 s and the process from
+  4.6 GB to 2.2 GB; each cached large index stops holding ~2.4 GB of heap no budget counted.
+- After an out-of-process reindex the daemon loads the saved BM25 index instead of rebuilding it.
 
 ## [0.22.0] — 2026-10-10
 

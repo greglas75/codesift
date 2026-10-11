@@ -42,8 +42,10 @@ component keeps its TS implementation; the binary is OPTIONAL.
   TS engine (`{ engine: "ts" }`) because incremental passes amend its sidecar.
   **Stage 9 (reopened 2026-10-11):** the native index persists as `<hash>.bm25n.bin` (`Bm25::to_bytes`,
   `bm25-native-store.ts`), staleness per file (mtime + symbol count, changed files re-applied with
-  `update_file`), rebuilt on another codesift version or extractor. 1.43M-symbol index: 285 MB, cold first
-  search 6.4 s instead of 17–27 s.
+  `update_file`), rebuilt on another codesift version or extractor. A native CODE index is store-backed:
+  no JS map of symbols, hits read from the store by id (`searchBM25Async`; the sync `searchBM25` throws on
+  such an index), builds streamed from the store. 1.43M-symbol index: 285 MB, cold first search 1.9 s and
+  2.2 GB RSS instead of 27.5 s and 4.6 GB.
 - **Stage 3 (parser: TS/TSX/JS, Python, Go, Rust, PHP, Kotlin, Gradle KTS — every tree-sitter extractor):** `runTreeSitterParse` → `extractSymbols` in Rust
   (`crates/codesift-core/src/extract/ts.rs`, a 1:1 port). tree-sitter `=0.26.11` (= web-tree-sitter),
   grammars `=0.23.2`/`=0.23.1` (= the shipped .wasm, verified by hash). Everything positional is UTF-16

@@ -45,8 +45,11 @@ function fingerprint(file: FileEntry): string {
   return `${file.mtime_ms ?? file.last_modified}|${file.symbol_count}`;
 }
 
+/** Key order cannot matter: the index child writes the CodeIndex's object, the daemon reads the
+ *  summary's parse of the stored JSON. */
 function extractorKey(code: Pick<CodeIndex, "extractor_version">): string {
-  return JSON.stringify(code.extractor_version ?? {});
+  const versions = code.extractor_version ?? {};
+  return JSON.stringify(Object.keys(versions).sort().map((k) => [k, String(versions[k])]));
 }
 
 function headerFor(code: Pick<CodeIndex, "files" | "extractor_version">): Header {
@@ -92,16 +95,20 @@ function parseHeader(raw: string | null): Header | null {
   }
 }
 
+/** What staleness is judged against: the file list and the extractor that produced the symbols. */
+export type IndexShape = Pick<CodeIndex, "files" | "extractor_version">;
+
 /**
- * The persisted index for `code`, brought up to date, or null when there is none or it must be
- * rebuilt. A damaged or foreign file is simply not used — the caller builds, and the next save
- * replaces it.
+ * The persisted native index, brought up to date with `symbolsInFiles` (the current symbols of the
+ * files that changed since the save), or null when there is none or it must be rebuilt. A damaged or
+ * foreign file is simply not used — the caller builds, and the next save replaces it.
  */
-export async function loadNativeBM25(
+export async function loadPersistedNativeBM25(
   core: { loadBm25(path: string): Promise<NativeBm25Handle> },
   indexPath: string,
-  code: CodeIndex,
-): Promise<NativeBM25Index | null> {
+  shape: IndexShape,
+  symbolsInFiles: (files: string[]) => Promise<CodeSymbol[]>,
+): Promise<NativeBm25Handle | null> {
   const path = nativeBm25PathFor(indexPath);
   try {
     if (!(await stat(path)).isFile()) return null;
@@ -115,36 +122,43 @@ export async function loadNativeBM25(
     return null;
   }
   const saved = parseHeader(native.loadedHeader);
-  const changed = saved ? filesToReapply(saved, code) : null;
+  const changed = saved ? filesToReapply(saved, shape) : null;
   if (!changed) {
     // Its Rust memory is invisible to V8; leaving it to a GC could hold gigabytes for nothing.
     native.release();
     return null;
   }
-
   if (changed.length > 0) {
-    // One pass groups the symbols of the changed files; updateBM25ForFile would walk every symbol per file.
-    const wanted = new Set(changed);
+    // Grouped once; updateBM25ForFile would walk every symbol per file.
     const byFile = new Map<string, CodeSymbol[]>();
-    for (const symbol of code.symbols) {
-      if (!wanted.has(symbol.file)) continue;
+    for (const symbol of await symbolsInFiles(changed)) {
       const list = byFile.get(symbol.file);
       if (list) list.push(symbol);
       else byFile.set(symbol.file, [symbol]);
     }
     for (const file of changed) native.updateFile(file, byFile.get(file) ?? []);
   }
+  return native;
+}
+
+/** `loadPersistedNativeBM25` over a loaded index, holding its symbols — the in-memory shape. */
+export async function loadNativeBM25(
+  core: { loadBm25(path: string): Promise<NativeBm25Handle> },
+  indexPath: string,
+  code: CodeIndex,
+): Promise<NativeBM25Index | null> {
+  const native = await loadPersistedNativeBM25(core, indexPath, code, async (files) => {
+    const wanted = new Set(files);
+    return code.symbols.filter((s) => wanted.has(s.file));
+  });
+  if (!native) return null;
   const symbols = new Map<string, CodeSymbol>();
   for (const symbol of code.symbols) symbols.set(symbol.id, symbol);
   return wrapNativeBM25(native, symbols);
 }
 
 /** Write `index` beside `indexPath` in the background. Failure leaves the next start to rebuild. */
-export async function saveNativeBM25(
-  index: NativeBM25Index,
-  indexPath: string,
-  code: Pick<CodeIndex, "files" | "extractor_version">,
-): Promise<void> {
+export async function saveNativeBM25(index: NativeBM25Index, indexPath: string, code: IndexShape): Promise<void> {
   const path = nativeBm25PathFor(indexPath);
   // Halves of a save killed mid-write (`<path>.tmp.<pid>`) are reclaimed like every other artifact's.
   await cleanupOrphanTempFiles(path);

@@ -52,6 +52,13 @@ export interface TsBM25Index {
 export interface NativeBM25Index {
   readonly native: NativeBm25Handle;
   symbols: Map<string, CodeSymbol>;
+  /**
+   * Set on code indexes whose symbols stay in the store: hits are looked up by id per search, and
+   * `symbols` is empty. Holding every symbol cost a 1.43M-symbol index 4.1 s to load and 2.4 GB of
+   * heap — more than the Rust index itself — that no cache budget counted. Search such an index with
+   * `searchBM25Async`.
+   */
+  readonly resolve?: (ids: readonly string[]) => Promise<Map<string, CodeSymbol>>;
   readonly docCount: number;
   /** Read by file in `search_text(ranked=true)`. Fixed after the build — updates do not recompute it
    *  in either implementation — so it is materialised once, on first read. */
@@ -325,6 +332,8 @@ function removeSymbolFromIndex(index: TsBM25Index, symbol: CodeSymbol): void {
 export function updateBM25ForFile(index: BM25Index, file: string, symbols: CodeSymbol[]): void {
   if (isNativeBM25(index)) {
     index.native.updateFile(file, symbols);
+    // A store-backed index keeps no symbols of its own: the store already holds the new ones.
+    if (index.resolve) return;
     // The JS half mirrors the same Map operations the TypeScript path performs on `index.symbols`.
     for (const [id, existing] of [...index.symbols]) if (existing.file === file) index.symbols.delete(id);
     for (const symbol of symbols) index.symbols.set(symbol.id, symbol);
@@ -455,11 +464,16 @@ async function buildNativeBM25(Ctor: new () => NativeBm25Handle, symbols: CodeSy
 }
 
 /** The `BM25Index` view of a native handle — built, or loaded from disk (`bm25-native-store.ts`). */
-export function wrapNativeBM25(native: NativeBm25Handle, symbols: Map<string, CodeSymbol>): NativeBM25Index {
+export function wrapNativeBM25(
+  native: NativeBm25Handle,
+  symbols: Map<string, CodeSymbol>,
+  resolve?: NativeBM25Index["resolve"],
+): NativeBM25Index {
   let centrality: Map<string, number> | undefined;
   return {
     native,
     symbols,
+    ...(resolve ? { resolve } : {}),
     get docCount() {
       return native.docCount;
     },
@@ -470,27 +484,60 @@ export function wrapNativeBM25(native: NativeBm25Handle, symbols: Map<string, Co
   };
 }
 
-export function searchBM25(
-  index: BM25Index,
-  query: string,
-  topK: number,
-  fieldWeights: Record<FieldName, number>,
-): SearchResult[] {
-  if (index.docCount === 0 || !query.trim()) {
-    return [];
-  }
-
-  // A field without a weight contributes nothing. Production always passes all five
-  // (`config.bm25FieldWeights` is typed so), but an untyped caller passing four used to turn that
-  // field's postings into NaN scores, whose sort order is unspecified — and differs between V8's sort
-  // and Rust's, so the two engines could not agree on it. Zero is the only well-defined reading.
-  fieldWeights = {
+/**
+ * A field without a weight contributes nothing. Production always passes all five
+ * (`config.bm25FieldWeights` is typed so), but an untyped caller passing four used to turn that
+ * field's postings into NaN scores, whose sort order is unspecified — and differs between V8's sort
+ * and Rust's, so the two engines could not agree on it. Zero is the only well-defined reading.
+ */
+function completeWeights(fieldWeights: Record<FieldName, number>): Record<FieldName, number> {
+  return {
     name: fieldWeights.name ?? 0,
     signature: fieldWeights.signature ?? 0,
     docstring: fieldWeights.docstring ?? 0,
     body: fieldWeights.body ?? 0,
     comments: fieldWeights.comments ?? 0,
   };
+}
+
+/**
+ * `searchBM25` for any index, including a store-backed native one (`resolve`), whose hits are looked
+ * up by id after the ranking. A colliding id resolves to the last row in index order — the entry a
+ * Map filled in index order holds — and a hit whose symbol is gone is dropped, as a Map miss is.
+ */
+export async function searchBM25Async(
+  index: BM25Index,
+  query: string,
+  topK: number,
+  fieldWeights: Record<FieldName, number>,
+): Promise<SearchResult[]> {
+  if (!isNativeBM25(index) || !index.resolve) return searchBM25(index, query, topK, fieldWeights);
+  if (index.docCount === 0 || !query.trim()) return [];
+  const hits = index.native.search(query, topK, weightsArray(completeWeights(fieldWeights)));
+  if (hits.length === 0) return [];
+  const byId = await index.resolve(hits.map((h) => h.id));
+  const results: SearchResult[] = [];
+  for (const hit of hits) {
+    const symbol = byId.get(hit.id);
+    if (symbol) results.push({ symbol, score: hit.score, matches: hit.matches });
+  }
+  return results;
+}
+
+export function searchBM25(
+  index: BM25Index,
+  query: string,
+  topK: number,
+  fieldWeights: Record<FieldName, number>,
+): SearchResult[] {
+  if (isNativeBM25(index) && index.resolve) {
+    // Its symbols are in the store; a synchronous search could only answer "nothing", silently.
+    throw new Error("searchBM25: a store-backed index is searched with searchBM25Async");
+  }
+  if (index.docCount === 0 || !query.trim()) {
+    return [];
+  }
+  fieldWeights = completeWeights(fieldWeights);
 
   if (isNativeBM25(index)) {
     const results: SearchResult[] = [];

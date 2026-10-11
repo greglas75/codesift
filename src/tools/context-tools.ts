@@ -1,5 +1,5 @@
 import { findRepoSymbols, getBM25Index, getIndexSummary } from "./index-tools.js";
-import { searchBM25 } from "../search/bm25.js";
+import { searchBM25Async } from "../search/bm25.js";
 import { loadConfig } from "../config.js";
 import { collectImportEdges } from "../utils/import-graph.js";
 import { collectHeritageFileEdgesFrom, HERITAGE_DECL_KINDS, type HeritageFileEdge } from "../utils/heritage-edges.js";
@@ -65,7 +65,7 @@ export async function assembleContext(
 
   // Search wider for compressed levels (more results fit in budget)
   const topK = lvl === "L0" ? 20 : lvl === "L1" ? 100 : 200;
-  let results = searchBM25(bm25Index, query, topK, config.bm25FieldWeights);
+  let results = await searchBM25Async(bm25Index, query, topK, config.bm25FieldWeights);
 
   if (rerank && results.length > 1) {
     const { rerankResults } = await import("../search/reranker.js");

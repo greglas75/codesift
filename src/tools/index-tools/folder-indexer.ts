@@ -15,7 +15,8 @@ import {
   getRepoName,
   updateRepoMeta,
 } from "../../storage/registry.js";
-import { buildBM25IndexYielding } from "../../search/bm25.js";
+import { buildBM25IndexYielding, isNativeBM25 } from "../../search/bm25.js";
+import { storeBackedBM25 } from "./store-backed-bm25.js";
 import { loadConfig } from "../../config.js";
 import { walkDirectory } from "../../utils/walk.js";
 import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
@@ -674,7 +675,9 @@ export async function indexFolder(
   const bm25Started = Date.now();
   const bm25 = await buildBM25IndexYielding(mergedSymbols);
   const bm25BuildMs = Date.now() - bm25Started;
-  rememberBM25Index(repoName, bm25);
+  // A native index is cached store-backed — the same Rust index without the JS map of every symbol
+  // (2.4 GB of heap on a 1.43M-symbol repo); hits are read from the index saved just below.
+  rememberBM25Index(repoName, isNativeBM25(bm25) ? storeBackedBM25(bm25.native, repoName) : bm25);
 
   // Resolve workspaces (Task 7) — runs before persistence so collectImportEdges
   // and other downstream consumers see the populated `workspaces` field.
@@ -715,8 +718,15 @@ export async function indexFolder(
   // when the build cost something. Awaited, because the process exits right after it returns.
   if (options?.report && bm25BuildMs >= BM25_PERSIST_MIN_BUILD_MS) {
     try {
-      const { saveBM25Index } = await import("../../search/bm25-store.js");
-      await saveBM25Index(indexPath, bm25, codeIndex);
+      // The native index has its own format; the TypeScript sidecar writer skips it, and the daemon
+      // then rebuilt on its first search after every out-of-process reindex.
+      if (isNativeBM25(bm25)) {
+        const { saveNativeBM25 } = await import("../../search/bm25-native-store.js");
+        await saveNativeBM25(bm25, indexPath, codeIndex);
+      } else {
+        const { saveBM25Index } = await import("../../search/bm25-store.js");
+        await saveBM25Index(indexPath, bm25, codeIndex);
+      }
     } catch {
       // A cache that failed to write is rebuilt on first use — slower, never wrong.
     }

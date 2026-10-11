@@ -16,7 +16,8 @@ import {
 import { IndexStorageError } from "../../storage/sqlite-index-store.js";
 import { assessOverload, DaemonOverloadedError } from "./overload-guard.js";
 import { loadBM25Index, saveBM25Index } from "../../search/bm25-store.js";
-import { loadNativeBM25, saveNativeBM25 } from "../../search/bm25-native-store.js";
+import { loadPersistedNativeBM25, saveNativeBM25 } from "../../search/bm25-native-store.js";
+import { storeBackedBM25 } from "./store-backed-bm25.js";
 import { getNativeCore } from "../../native/index.js";
 import { findSymbols, streamSymbols } from "../../storage/index-store.js";
 import type { SymbolQuery } from "../../storage/sqlite/queries.js";
@@ -37,7 +38,7 @@ import {
 import { getChunkPath, getChunkEmbeddingPath } from "../../storage/chunk-store.js";
 import { getGraphPath } from "../../storage/graph-store.js";
 import { getSnapshotPath } from "../../storage/hash-snapshot.js";
-import { buildBM25IndexYielding, isNativeBM25 } from "../../search/bm25.js";
+import { buildBM25IndexYielding, type NativeBM25Index } from "../../search/bm25.js";
 import type { BM25Index } from "../../search/bm25.js";
 import { loadConfig, localEmbeddingsDisabled, embeddingMemBudgetBytes } from "../../config.js";
 import { ensureIndexFresh } from "./file-indexer.js";
@@ -132,6 +133,13 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
     return cached;
   }
 
+  const nativeCore = getNativeCore("bm25");
+  if (nativeCore) {
+    const native = await openStoreBackedBM25(nativeCore, resolvedName, meta.index_path);
+    if (native) rememberBM25Index(resolvedName, native);
+    return native;
+  }
+
   const index = await loadIndex(meta.index_path);
   if (!index) return null;
 
@@ -139,12 +147,7 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   // a rebuild is 10.04 s, reconstructing the same maps from the sidecar is 0.70 s. The expensive
   // half of a build is tokenising every symbol, and that result does not change until the index
   // does — so it is worth writing down. A stale or unreadable sidecar returns null and we rebuild.
-  // The native index persists in its own format (bm25-native-store.ts): the TypeScript sidecar cannot
-  // carry the token lists a native index needs for exact removal.
-  const nativeCore = getNativeCore("bm25");
-  const restored = nativeCore
-    ? await loadNativeBM25(nativeCore, meta.index_path, index)
-    : await loadBM25Index(meta.index_path, index);
+  const restored = await loadBM25Index(meta.index_path, index);
   if (restored) {
     rememberBM25Index(resolvedName, restored);
     return restored;
@@ -163,10 +166,61 @@ export async function getBM25Index(repoName: string): Promise<BM25Index | null> 
   if (buildMs >= BM25_PERSIST_MIN_BUILD_MS) {
     // Not awaited: the caller has a working index in memory, and making the first search wait on a
     // cache write would spend the very seconds this exists to save.
-    void (isNativeBM25(bm25) ? saveNativeBM25(bm25, meta.index_path, index) : saveBM25Index(meta.index_path, bm25, index))
-      .catch(() => {});
+    void saveBM25Index(meta.index_path, bm25, index).catch(() => {});
   }
   return bm25;
+}
+
+/** Symbols handed to the Rust builder per call while streaming a build. */
+const STREAM_BUILD_BATCH = 5_000;
+
+/**
+ * The native BM25 index of a code repo, without the repo's symbols in memory (ADR-006 stage 9).
+ * Loading the whole index for them cost a 1.43M-symbol repo 4.1 s and 2.4 GB of heap per cached
+ * index, more than the Rust index itself, and no budget counted it. The persisted index is loaded
+ * when there is one (the symbols of files changed since the save come from the store); otherwise the
+ * symbols are streamed from the store into the builder in index order, and nothing stays resident.
+ * Search hits are looked up by id (`resolve`).
+ */
+async function openStoreBackedBM25(
+  core: NonNullable<ReturnType<typeof getNativeCore>>,
+  repo: string,
+  indexPath: string,
+): Promise<NativeBM25Index | null> {
+  // Freshness already ran in getBM25Index.
+  const summary = await getIndexSummary(repo, { skipFreshness: true });
+  if (!summary) return null;
+  // narrow-reads imports this module; loaded at call time, never at module evaluation.
+  const { findRepoSymbolsInFiles } = await import("./narrow-reads.js");
+  const loaded = await loadPersistedNativeBM25(core, indexPath, summary, (files) =>
+    findRepoSymbolsInFiles(repo, files, { withSource: true, skipFreshness: true }),
+  );
+  if (loaded) return storeBackedBM25(loaded, repo);
+
+  const started = Date.now();
+  const native = new core.NativeBm25();
+  let pending: CodeSymbol[] = [];
+  await streamRepoSymbols(
+    repo,
+    { withSource: true },
+    async (batch) => {
+      pending.push(...batch);
+      if (pending.length < STREAM_BUILD_BATCH) return;
+      const chunk = pending;
+      pending = [];
+      // Awaited in order: ingestion order is what ties are broken by.
+      await native.ingestAsync(chunk);
+    },
+    { skipFreshness: true },
+  );
+  if (pending.length > 0) await native.ingestAsync(pending);
+  native.finish();
+  const index = storeBackedBM25(native, repo);
+  if (Date.now() - started >= BM25_PERSIST_MIN_BUILD_MS) {
+    // Not awaited, as above: the first search must not wait on the write.
+    void saveNativeBM25(index, indexPath, summary).catch(() => {});
+  }
+  return index;
 }
 
 /**

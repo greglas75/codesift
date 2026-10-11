@@ -1,5 +1,5 @@
-import { getBM25Index } from "../index-tools.js";
-import { applyCutoff, searchBM25, type BM25Index } from "../../search/bm25.js";
+import { getBM25Index, streamRepoSymbols } from "../index-tools.js";
+import { applyCutoff, isNativeBM25, searchBM25Async, type BM25Index } from "../../search/bm25.js";
 import { loadConfig } from "../../config.js";
 import { matchFilePattern } from "../../utils/glob.js";
 import type { CodeSymbol, SearchResult } from "../../types.js";
@@ -99,28 +99,54 @@ function shapeSearchResults(
   return cleanSearchResults(shaped);
 }
 
-function collectSearchResults(
+async function collectSearchResults(
+  repo: string,
   index: BM25Index,
   query: string,
   topK: number,
   options: SearchSymbolsOptions | undefined,
   fieldWeights: ReturnType<typeof loadConfig>["bm25FieldWeights"],
-): SearchResult[] {
-  if (!query.trim()) {
-    const results: SearchResult[] = [];
-    for (const symbol of index.symbols.values()) {
-      if (!matchesSymbolFilters(symbol, options)) continue;
-      results.push({ symbol, score: 0 });
-      if (results.length >= topK) break;
-    }
-    return results;
-  }
+): Promise<SearchResult[]> {
+  if (!query.trim()) return firstMatchingSymbols(repo, index, topK, options);
   const hasFilters = !!options?.kind || !!options?.file_pattern || !!options?.decorator;
   const searchTopK = hasFilters ? Math.max(topK * BM25_FILTER_MULTIPLIER, BM25_FILTER_MIN_K) : topK;
-  const filtered = searchBM25(index, query, searchTopK, fieldWeights)
+  const filtered = (await searchBM25Async(index, query, searchTopK, fieldWeights))
     .filter(({ symbol }) => matchesSymbolFilters(symbol, options))
     .slice(0, topK);
   return applyCutoff(filtered);
+}
+
+/** An empty query lists the first `topK` symbols that pass the filters, in index order. */
+async function firstMatchingSymbols(
+  repo: string,
+  index: BM25Index,
+  topK: number,
+  options: SearchSymbolsOptions | undefined,
+): Promise<SearchResult[]> {
+  const results: SearchResult[] = [];
+  if (isNativeBM25(index) && index.resolve) {
+    // A store-backed index holds no symbols; read them in index order and stop at topK.
+    await streamRepoSymbols(
+      repo,
+      { withSource: true },
+      (batch) => {
+        for (const symbol of batch) {
+          if (!matchesSymbolFilters(symbol, options)) continue;
+          results.push({ symbol, score: 0 });
+          if (results.length >= topK) return false;
+        }
+        return undefined;
+      },
+      { skipFreshness: true },
+    );
+    return results;
+  }
+  for (const symbol of index.symbols.values()) {
+    if (!matchesSymbolFilters(symbol, options)) continue;
+    results.push({ symbol, score: 0 });
+    if (results.length >= topK) break;
+  }
+  return results;
 }
 
 function resolveDetailLevel(
@@ -179,7 +205,7 @@ export async function searchSymbols(
   const config = loadConfig();
   const includeSource = options?.include_source ?? true;
   const topK = resolveTopK(config.defaultTopK, includeSource, options);
-  let results = collectSearchResults(index, query, topK, options, config.bm25FieldWeights);
+  let results = await collectSearchResults(repo, index, query, topK, options, config.bm25FieldWeights);
   results = await rerankSearchResults(query, results, options?.rerank === true);
   const shaped = shapeSearchResults(results, resolveDetailLevel(results, options), includeSource, options);
   const tokenBudget = options?.token_budget;
