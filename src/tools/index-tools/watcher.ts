@@ -30,13 +30,24 @@ export function watcherIsCurrent(repoName: string, token: object): boolean {
   return currentWatcherTokens.get(repoName)?.token === token;
 }
 
+/** Forget every token (tests' stopAll). */
+export function clearWatcherTokens(): void {
+  currentWatcherTokens.clear();
+}
+
 /**
  * Called when `repoName` is indexed from `root` without a watcher: a watcher of ANOTHER root under the
- * same name is retired, so its queued events stop editing the name's caches. Same root: left running.
+ * same name is stopped and its token dropped at once, so events already queued stop editing the name's
+ * caches too. A watcher of the same root is left running — it watches the tree that was just indexed.
  */
-export function retireWatcherOfOtherRoot(repoName: string, root: string): void {
+export async function retireWatcherOfOtherRoot(repoName: string, root: string): Promise<void> {
   const current = currentWatcherTokens.get(repoName);
-  if (current && current.root !== root) currentWatcherTokens.delete(repoName);
+  if (!current || current.root === root) return;
+  currentWatcherTokens.delete(repoName);
+  const watcher = activeWatchers.get(repoName);
+  activeWatchers.delete(repoName);
+  watcherInsertionOrder.delete(repoName);
+  if (watcher) await stopWatcher(watcher).catch(() => { /* best-effort */ });
 }
 
 /**
@@ -73,6 +84,7 @@ export async function setupWatcher(
       await stopWatcher(oldWatcher).catch(() => { /* best-effort */ });
       activeWatchers.delete(oldest);
     }
+    currentWatcherTokens.delete(oldest);
     watcherInsertionOrder.delete(oldest);
     console.error(
       `[codesift] watcher cap reached (${maxWatchers}); evicted oldest watcher: ${oldest}`,
@@ -84,12 +96,15 @@ export async function setupWatcher(
   // still fire after it is stopped, and used to remove symbols of the same relative path from the new
   // tree's index (the full-suite test flake of 2026-10-11, and a re-rooted repo in the field).
   const token = {};
+  const stillCurrent = (): boolean => watcherIsCurrent(repoName, token);
   currentWatcherTokens.set(repoName, { token, root: rootPath });
-  const watcher = await startWatcher(
+  let watcher: Awaited<ReturnType<typeof startWatcher>>;
+  try {
+    watcher = await startWatcher(
     rootPath,
     (changedFile) => {
-      if (!watcherIsCurrent(repoName, token)) return;
-      handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
+      if (!stillCurrent()) return;
+      handleFileChange(rootPath, repoName, indexPath, changedFile, stillCurrent).catch(
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[codesift] Watcher error for ${changedFile}: ${message}`);
@@ -97,8 +112,8 @@ export async function setupWatcher(
       );
     },
     (deletedFile) => {
-      if (!watcherIsCurrent(repoName, token)) return;
-      handleFileDelete(rootPath, repoName, indexPath, deletedFile).catch(
+      if (!stillCurrent()) return;
+      handleFileDelete(rootPath, repoName, indexPath, deletedFile, stillCurrent).catch(
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           console.error(`[codesift] Watcher delete error for ${deletedFile}: ${message}`);
@@ -106,6 +121,11 @@ export async function setupWatcher(
       );
     },
   );
+  } catch (err) {
+    // No watcher came up: its token must not stand in for one.
+    if (stillCurrent()) currentWatcherTokens.delete(repoName);
+    throw err;
+  }
   activeWatchers.set(repoName, watcher);
   watcherInsertionOrder.add(repoName);
 }
@@ -119,6 +139,8 @@ async function handleFileChange(
   repoName: string,
   indexPath: string,
   relativeFile: string,
+  /** Re-checked after the awaits, right before the name-keyed caches are touched. */
+  stillCurrent: () => boolean = () => true,
 ): Promise<void> {
   const fullPath = join(repoRoot, relativeFile);
 
@@ -155,6 +177,7 @@ async function handleFileChange(
     }
   }
 
+  if (!stillCurrent()) return;
   // Swap this file's symbols in place rather than dropping the index — see updateBM25ForFile.
   const cachedBm25 = bm25Indexes.get(repoName);
   if (cachedBm25) {
@@ -173,8 +196,10 @@ async function handleFileDelete(
   repoName: string,
   indexPath: string,
   relativeFile: string,
+  stillCurrent: () => boolean = () => true,
 ): Promise<void> {
   await removeFileFromIndex(indexPath, relativeFile);
+  if (!stillCurrent()) return;
 
   // A deletion is the same swap with nothing to put back: drop the file's symbols, keep the rest
   // of the index. Dropping the whole index here would make `rm` as expensive as a reindex.

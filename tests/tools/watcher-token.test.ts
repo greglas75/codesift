@@ -41,7 +41,9 @@ describe("watcher of another tree under the same repo name", () => {
     await searchSymbols(second.repo, "sharedThing", { top_k: 1 }); // cache b's BM25
 
     await rm(join(a, "src", "shared.ts"));
-    await new Promise((resolve) => setTimeout(resolve, 2_000)); // past the watcher's delivery
+    // A's watcher is stopped now, so nothing is delivered; but an unguarded old watcher would have
+    // edited B's cache within this window (verified: the previous code fails here).
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
 
     const names = (await searchSymbols(second.repo, "sharedThing", { top_k: 3 })).map((r) => r.symbol.name);
     expect(names).toContain("sharedThing");

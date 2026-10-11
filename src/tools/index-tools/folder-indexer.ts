@@ -810,7 +810,7 @@ export async function indexFolder(
   if (options?.watch !== false) {
     await setupWatcher(rootPath, repoName, indexPath);
   } else {
-    retireWatcherOfOtherRoot(repoName, rootPath);
+    await retireWatcherOfOtherRoot(repoName, rootPath);
   }
 
   // Auto-enable framework-specific tool bundles (NestJS, etc.)

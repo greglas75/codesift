@@ -145,6 +145,8 @@ export async function indexRepo(
 export async function stopAllWatchersForTesting(): Promise<void> {
   const watchers = [...activeWatchers.values()];
   activeWatchers.clear();
+  const { clearWatcherTokens } = await import("./index-tools/watcher.js");
+  clearWatcherTokens();
   await Promise.all(watchers.map((w) => stopWatcher(w).catch(() => {})));
   bm25Indexes.clear();
   codeIndexes.clear();
