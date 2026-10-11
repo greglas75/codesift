@@ -31,7 +31,10 @@ beforeEach(async () => {
   await writeFile(join(root, "src", "small.ts"), "export function smallOne(): number {\n  return 42;\n}\n");
   const body = Array.from({ length: 200 }, (_, i) => `  const value${i} = "${"x".repeat(20)}";`).join("\n");
   await writeFile(join(root, "src", "big.ts"), `export function hugeOne(): number {\n${body}\n  return 0;\n}\n`);
-  await indexFolder(root);
+  // No watcher: every test indexes a fresh temp tree under the SAME repo name, and the previous test's
+  // watcher, seeing its tree deleted in afterEach, removed src/small.ts from THIS index — under load
+  // its events landed after this indexFolder, and smallOne vanished (CI flake, 2026-10-11).
+  await indexFolder(root, { watch: false });
   resetShownSourceLedgerForTesting(true);
 });
 

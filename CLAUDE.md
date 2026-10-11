@@ -961,8 +961,8 @@ sum as unattributed retention** — `heapUsed` includes uncollected garbage: 103
 cache is growing and is its bound working", which needs a series of samples, not one.
 
 Unrelated, found while running the suite: `tests/tools/explore-tools.test.ts > does not record a
-clipped body as shown` **fails 1 in 12 runs in isolation** (`rt --repeat 12`), with `explore` returning
-"No symbols match" — its fixture is sometimes not indexed yet when the test runs. Pre-existing.
+clipped body as shown` failed 1 in 12 runs with `explore` returning "No symbols match" — the same
+stale-watcher cause as the dedup flake below, fixed the same way (2026-10-11).
 
 ## Persisting the BM25 cache did not pay because 91% of the file was one repeated string (2026-09-27)
 
@@ -1082,10 +1082,10 @@ bug yields confident wrong search results rather than an error. It is also backg
 `autoDiscoverConversations` is fire-and-forget, so nothing waits on it.
 
 Unrelated, measured while running the suite: `tests/tools/explore-tools.test.ts` (two cases) and
-`tests/tools/symbol-source-dedup.test.ts` fail **only under the full suite** — 10/10 green in isolation
-(`rt --repeat 10`), and two consecutive full runs disagreed with no code change between them. Both
-touch module-level shared state under 4 workers. Pre-existing, and the flake is in the harness rather
-than in what it tests.
+`tests/tools/symbol-source-dedup.test.ts` failed **only under the full suite**. Cause, found 2026-10-11:
+each test indexed a fresh temp tree under the SAME repo name with the watcher on, and the previous
+test's watcher, seeing its tree deleted in `afterEach`, removed `src/small.ts` from the current index
+whenever its events landed late (i.e. under load). Fixed with `indexFolder(root, { watch: false })`.
 
 ## Memory controls (low-RAM / multi-session)
 - **Auto-lite by total RAM (default, `config.ts`)**: on machines with **< 24 GB** total RAM, the local embedding model (nomic via onnxruntime, ~1–1.5 GB resident) is **not loaded by default** — this was previously the manual `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=1` recommendation, now automatic so codesift stops OOM-ing small machines out of the box. BM25 + tree-sitter symbols still work; only semantic embeddings go dark. Logged once on startup. Override: `CODESIFT_DISABLE_LOCAL_EMBEDDINGS=0` forces the model on regardless of RAM (`=1`/`true` still forces lite on any machine); a remote provider (Voyage/OpenAI/Ollama) sidesteps the local model entirely.

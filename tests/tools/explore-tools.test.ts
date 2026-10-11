@@ -43,7 +43,9 @@ export function checkoutCart(lines: number[]): string {
   const longBody = Array.from({ length: 80 }, (_, i) => `  const step${i} = ${i};`).join("\n");
   await writeFile(join(root, "src", "long.ts"), `export function veryLongRoutine(): number {\n${longBody}\n  return 0;\n}\n`);
   await writeFile(join(root, "src", "wide.ts"), `export const oneLongLine = "${"w".repeat(1_000)}";\n`);
-  await indexFolder(root);
+  // No watcher: every test indexes a fresh temp tree under the same repo name, and an earlier
+  // test's watcher, seeing its tree deleted, removes files from THIS index (the full-suite flake).
+  await indexFolder(root, { watch: false });
 });
 
 afterEach(async () => {
