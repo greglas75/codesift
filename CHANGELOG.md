@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Indexing honours `.gitignore`.** The walker, `index_file` and the watcher skip what git ignores
+  (tracked files always stay; outside a git checkout nothing changes; `CODESIFT_RESPECT_GITIGNORE=0`
+  turns it off). On one repo 80% of the index — 1.15M of 1.43M symbols — came from gitignored copies of
+  the source tree, and so did most of its BM25 index, its call graph and the tool timeouts on it. The
+  first reindex after upgrading drops them; the partial-walk guard reads that shrink as expected.
+
 - **The native BM25 index is saved and reloaded** instead of being rebuilt on every cold start
   (`<hash>.bm25n.bin`, written after a build that took over a second). A file edited since the save is
   re-applied on load; a different codesift version or extractor rebuilds.

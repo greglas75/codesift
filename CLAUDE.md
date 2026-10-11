@@ -150,6 +150,16 @@ in `detectAutoLoadTools` at `src/register-tools.ts`.
 ### search_text ranked mode (NEW)
 `search_text(repo, query, ranked=true)` classifies each hit by its containing function, deduplicates (max 2 per function), and ranks by symbol centrality. Returns `TextMatch` with `containing_symbol` field. Saves 1-3 follow-up get_symbol calls. Takes precedence over `auto_group`.
 
+### Indexing honours .gitignore (2026-10-11)
+
+The walker knew only `IGNORE_DIRS`, never `.gitignore`. On rdesigner **1,147,279 of 1,429,034 symbols
+(80%)** were gitignored copies of the source under `zuvo/` — in every worktree's index, its BM25 index and
+its call graph (230M edges with tests). `src/utils/walk/gitignore.ts` asks
+`git ls-files --others --ignored --exclude-standard --directory` (~0.15 s there); the walker prunes the
+result, `index_file` refuses and prunes an ignored file (`excluded_by: ".gitignore"`), the watcher adds it
+to its native ignore list, and the partial-walk guard counts now-ignored old files as explained. Tracked
+files always stay; no git checkout, no change; `CODESIFT_RESPECT_GITIGNORE=0` turns it off.
+
 ### index_folder sanity check is now visible + self-healing (NEW)
 When a re-walk finds <50% of the previously indexed file count, index_folder keeps the old index — but now returns `status: "rejected_partial"` + `reason` + `hint` instead of silently echoing the old counts as success (pre-fix this skipped saveIndex AND registerRepo, so the repo could vanish from the registry while the tool reported OK). Before rejecting, it samples the old index's paths on disk: if ≥50% no longer exist (e.g. deleted `.worktrees/` swept by an older walker), the old index is treated as stale and the new one is accepted (auto-heal — breaks the poisoned-baseline deadlock where every honest reindex was rejected forever).
 
