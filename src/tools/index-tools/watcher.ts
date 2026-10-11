@@ -22,6 +22,23 @@ function getMaxWatchers(): number {
 // moves it to the end, so the first key is the least-recently set up.
 const watcherInsertionOrder = new Set<string>();
 
+/** The live watcher's token and root per repo name; see setupWatcher. */
+const currentWatcherTokens = new Map<string, { token: object; root: string }>();
+
+/** Whether `token` still belongs to the watcher serving `repoName` (exported for tests). */
+export function watcherIsCurrent(repoName: string, token: object): boolean {
+  return currentWatcherTokens.get(repoName)?.token === token;
+}
+
+/**
+ * Called when `repoName` is indexed from `root` without a watcher: a watcher of ANOTHER root under the
+ * same name is retired, so its queued events stop editing the name's caches. Same root: left running.
+ */
+export function retireWatcherOfOtherRoot(repoName: string, root: string): void {
+  const current = currentWatcherTokens.get(repoName);
+  if (current && current.root !== root) currentWatcherTokens.delete(repoName);
+}
+
 /**
  * Replace or create a file watcher for incremental index updates.
  *
@@ -62,9 +79,16 @@ export async function setupWatcher(
     );
   }
 
+  // The token this watcher's callbacks check before acting. Name-keyed caches (bm25Indexes,
+  // codeIndexes) belong to whichever tree the name points at NOW; a replaced watcher's debounced events
+  // still fire after it is stopped, and used to remove symbols of the same relative path from the new
+  // tree's index (the full-suite test flake of 2026-10-11, and a re-rooted repo in the field).
+  const token = {};
+  currentWatcherTokens.set(repoName, { token, root: rootPath });
   const watcher = await startWatcher(
     rootPath,
     (changedFile) => {
+      if (!watcherIsCurrent(repoName, token)) return;
       handleFileChange(rootPath, repoName, indexPath, changedFile).catch(
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
@@ -73,6 +97,7 @@ export async function setupWatcher(
       );
     },
     (deletedFile) => {
+      if (!watcherIsCurrent(repoName, token)) return;
       handleFileDelete(rootPath, repoName, indexPath, deletedFile).catch(
         (err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);

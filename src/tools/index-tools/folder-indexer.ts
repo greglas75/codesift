@@ -25,7 +25,7 @@ import type { CodeIndex, CodeSymbol, FileEntry, RepoMeta } from "../../types.js"
 import { activeWatchers, bm25Indexes, BM25_PERSIST_MIN_BUILD_MS, codeIndexes, invalidateEmbeddingCaches, lastFullIndexAt, rememberBM25Index } from "./state.js";
 import { parseFiles, propagateDirtySignatures, embedSymbols, embedChunks } from "./parse.js";
 import { drainLegacyHashQueue, loadIndexSnapshot, saveIndexSnapshot, sha1OfFile } from "./snapshots.js";
-import { setupWatcher } from "./watcher.js";
+import { setupWatcher, retireWatcherOfOtherRoot } from "./watcher.js";
 import { validateAndMergeFolderWalk } from "./folder-merge.js";
 import type { IndexFolderResult } from "./types.js";
 import {
@@ -809,6 +809,8 @@ export async function indexFolder(
   // Start file watcher for incremental updates (unless disabled)
   if (options?.watch !== false) {
     await setupWatcher(rootPath, repoName, indexPath);
+  } else {
+    retireWatcherOfOtherRoot(repoName, rootPath);
   }
 
   // Auto-enable framework-specific tool bundles (NestJS, etc.)
