@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-10-11
+
+Large repositories get cheap to search: indexing honours `.gitignore`, and the native BM25 index is
+saved, reloaded and no longer holds every symbol in memory.
+
 ### Changed
 
 - **Indexing honours `.gitignore`.** The walker, `index_file` and the watcher skip what git ignores
