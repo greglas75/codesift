@@ -10,6 +10,13 @@ import { getBoolFlag, output, die } from "./args.js";
  * deleted — each leaves multi-GB embedding files behind. Use --dry-run to
  * preview. Regenerable: re-indexing recreates anything still needed.
  */
+/** Databases below this are not worth a VACUUM; `CODESIFT_PRUNE_VACUUM_MIN_MB` overrides (tests use 0). */
+function vacuumMinBytes(): number {
+  const raw = process.env["CODESIFT_PRUNE_VACUUM_MIN_MB"];
+  const mb = raw === undefined ? Number.NaN : Number(raw);
+  return (Number.isFinite(mb) && mb >= 0 ? mb : 64) * 1024 * 1024;
+}
+
 async function handlePrune(_args: string[], flags: Flags): Promise<void> {
   const { loadConfig } = await import("../config.js");
   const { withRegistryLock } = await import("../storage/registry.js");
@@ -434,8 +441,53 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<vo
     }
   }
 
+  // A full reindex rewrites an index by DELETE + INSERT, which frees pages but never returns them to
+  // the disk. Measured 2026-10-11: rdesigner shed 68% of its symbols (gitignored copies) and its
+  // database stayed at 2.5 GB. VACUUM rebuilds the file — only for a database at least 64 MB with at
+  // least half its pages free, and with busy_timeout 0, so one being written is skipped, never waited
+  // on. Readers are safe: every paged reader holds one snapshot across its pages, and in WAL mode a
+  // VACUUM does not disturb an open snapshot. VACUUM may renumber rowids but copies rows in rowid order
+  // — the only order anything relies on — and it moves data_version, so cached call graphs rebuild.
+  let vacuumed = 0, vacuumBefore = 0, vacuumAfter = 0;
+  const vacuumCandidates: string[] = [];
+  {
+    const DatabaseSync = await loadSqliteCtor();
+    for (const name of DatabaseSync ? readdirSync(dataDir) : []) {
+      if (!name.endsWith(".index.db")) continue;
+      const full = join(dataDir, name);
+      let size: number;
+      try {
+        size = statSync(full).size;
+      } catch {
+        continue;
+      }
+      if (size < vacuumMinBytes()) continue;
+      try {
+        const db = new DatabaseSync!(full);
+        try {
+          db.exec("PRAGMA busy_timeout = 0");
+          const free = (db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+          const pages = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count;
+          if (pages === 0 || free / pages < 0.5) continue;
+          vacuumCandidates.push(name);
+          if (dryRun) continue;
+          db.exec("VACUUM");
+          db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          vacuumed++;
+          vacuumBefore += size;
+          vacuumAfter += statSync(full).size;
+        } finally {
+          db.close();
+        }
+      } catch { /* busy (in use) or unreadable — left exactly as it was */ }
+    }
+  }
+
   output({
     bm25_superseded_format: bm25Superseded,
+    vacuum_candidates: vacuumCandidates.length,
+    vacuumed,
+    vacuum_reclaimed_gb: +((vacuumBefore - vacuumAfter) / 1e9).toFixed(2),
     wal_checkpointed: walCheckpointed,
     wal_reclaimed_gb: +((walBefore - walAfter) / 1e9).toFixed(2),
     indeterminate_databases: indeterminate.length,

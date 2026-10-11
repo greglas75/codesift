@@ -149,6 +149,64 @@ describe("codesift prune", () => {
     check.close();
   });
 
+  // Bug it catches: a reindex that drops most of an index frees pages but never returns them —
+  // rdesigner's database stayed at 2.5 GB after shedding 68% of its symbols.
+  it("vacuums an index database that is mostly free pages, keeping its data", async () => {
+    process.env.CODESIFT_PRUNE_VACUUM_MIN_MB = "0";
+    const dbPath = join(dir, `${LIVE}.index.db`);
+    writeIndexDb(dbPath, "local/live", dir);
+    const db = new DatabaseSync(dbPath);
+    db.exec("CREATE TABLE bulk (id INTEGER PRIMARY KEY, blob TEXT)");
+    const insert = db.prepare("INSERT INTO bulk (blob) VALUES (?)");
+    db.exec("BEGIN");
+    for (let i = 0; i < 3000; i++) insert.run("x".repeat(1000));
+    db.exec("COMMIT");
+    db.exec("DELETE FROM bulk WHERE id > 100");
+    db.close();
+    const before = statSync(dbPath).size;
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    const out = JSON.parse(stdout);
+    delete process.env.CODESIFT_PRUNE_VACUUM_MIN_MB;
+
+    expect(out.vacuumed).toBe(1);
+    expect(statSync(dbPath).size).toBeLessThan(before / 2);
+    const check = new DatabaseSync(dbPath);
+    expect((check.prepare("SELECT COUNT(*) AS n FROM bulk").get() as { n: number }).n).toBe(100);
+    check.close();
+  });
+
+  // Bug it catches: VACUUM renumbering rows under a reader that pages by rowid across awaits. Every
+  // paged reader holds one snapshot for its whole scan, and in WAL mode a VACUUM does not disturb it.
+  it("vacuums under an open reader without changing what that reader sees", async () => {
+    process.env.CODESIFT_PRUNE_VACUUM_MIN_MB = "0";
+    const dbPath = join(dir, `${LIVE}.index.db`);
+    writeIndexDb(dbPath, "local/live", dir);
+    const db = new DatabaseSync(dbPath);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("CREATE TABLE bulk (blob TEXT)");
+    const insert = db.prepare("INSERT INTO bulk (blob) VALUES (?)");
+    db.exec("BEGIN");
+    for (let i = 0; i < 3000; i++) insert.run(`row ${i} ${"x".repeat(1000)}`);
+    db.exec("COMMIT");
+    db.exec("DELETE FROM bulk WHERE rowid % 30 != 0");
+    const reader = new DatabaseSync(dbPath);
+    reader.exec("BEGIN");
+    const page = () => (reader.prepare("SELECT rowid AS r, substr(blob, 1, 12) AS b FROM bulk ORDER BY rowid LIMIT 5").all());
+    const seenBefore = page();
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    const out = JSON.parse(stdout);
+    delete process.env.CODESIFT_PRUNE_VACUUM_MIN_MB;
+    const seenDuring = page();
+    reader.exec("COMMIT");
+    reader.close();
+    db.close();
+
+    expect(out.vacuumed).toBe(1);
+    expect(seenDuring).toEqual(seenBefore);
+  });
+
   it("reclaims a BM25 cache written by a superseded format", async () => {
     // A format bump strands every existing file: the loader rejects the old header and rebuilds, but
     // the bytes only go away when that repo is indexed again — never, for a repo nobody touches.
