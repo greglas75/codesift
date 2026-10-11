@@ -17,6 +17,9 @@
   id. On a 1.43M-symbol index the first `search_symbols` drops from 27.5 s to 1.9 s and the process from
   4.6 GB to 2.2 GB; each cached large index stops holding ~2.4 GB of heap no budget counted.
 - After an out-of-process reindex the daemon loads the saved BM25 index instead of rebuilding it.
+- **`prune` reclaims the space a reindex frees.** It runs `VACUUM` on index databases of at least 64 MB
+  with at least half their pages free, outside the registry lock, skipping any database being written.
+  On the maintainer's machine two runs took the data directory from 158 GB to 104 GB.
 
 ## [0.22.0] — 2026-10-10
 
