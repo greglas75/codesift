@@ -23,8 +23,11 @@ export interface GitIgnored {
 }
 
 const LIST_TIMEOUT_MS = 15_000;
-/** `index_file` and the watcher ask per event; one listing serves a burst of edits. */
+/** Walks (search_text's fallback walks per call), `index_file` per edit and the watcher at start all
+ *  ask; one listing serves them for 30 s, so a .gitignore edit applies within that. */
 const CACHE_TTL_MS = 30_000;
+/** One entry per repository root; the daemon outlives every session and sees many roots. */
+const MAX_CACHED_ROOTS = 64;
 const cache = new Map<string, { at: number; value: Promise<GitIgnored | null> }>();
 
 function respectsGitignore(): boolean {
@@ -70,12 +73,18 @@ async function listIgnored(root: string): Promise<GitIgnored | null> {
 }
 
 /** The ignored set for `root`, or null when gitignore does not apply (off, or not a git checkout). */
-export function loadGitIgnored(root: string, opts?: { fresh?: boolean }): Promise<GitIgnored | null> {
+export function loadGitIgnored(root: string): Promise<GitIgnored | null> {
   if (!respectsGitignore()) return Promise.resolve(null);
+  const now = Date.now();
   const hit = cache.get(root);
-  if (hit && !opts?.fresh && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  if (hit && now - hit.at < CACHE_TTL_MS) return hit.value;
   const value = listIgnored(root);
-  cache.set(root, { at: Date.now(), value });
+  cache.delete(root);
+  cache.set(root, { at: now, value });
+  for (const [key, entry] of cache) {
+    if (cache.size <= MAX_CACHED_ROOTS && now - entry.at < CACHE_TTL_MS) break;
+    if (key !== root) cache.delete(key);
+  }
   return value;
 }
 

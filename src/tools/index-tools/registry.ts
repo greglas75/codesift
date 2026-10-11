@@ -205,22 +205,28 @@ async function openStoreBackedBM25(
 
   const started = Date.now();
   const native = new core.NativeBm25();
-  let pending: CodeSymbol[] = [];
-  await streamRepoSymbols(
-    repo,
-    { withSource: true },
-    async (batch) => {
-      pending.push(...batch);
-      if (pending.length < STREAM_BUILD_BATCH) return;
-      const chunk = pending;
-      pending = [];
-      // Awaited in order: ingestion order is what ties are broken by.
-      await native.ingestAsync(chunk);
-    },
-    { skipFreshness: true },
-  );
-  if (pending.length > 0) await native.ingestAsync(pending);
-  native.finish();
+  try {
+    let pending: CodeSymbol[] = [];
+    await streamRepoSymbols(
+      repo,
+      { withSource: true },
+      async (batch) => {
+        pending.push(...batch);
+        if (pending.length < STREAM_BUILD_BATCH) return;
+        const chunk = pending;
+        pending = [];
+        // Awaited in order: ingestion order is what ties are broken by.
+        await native.ingestAsync(chunk);
+      },
+      { skipFreshness: true },
+    );
+    if (pending.length > 0) await native.ingestAsync(pending);
+    native.finish();
+  } catch (err) {
+    // A half-built index's Rust memory is invisible to V8; free it before the caller falls back.
+    native.release();
+    throw err;
+  }
   const index = storeBackedBM25(native, repo);
   if (Date.now() - started >= BM25_PERSIST_MIN_BUILD_MS) {
     // Not awaited, as above: the first search must not wait on the write.

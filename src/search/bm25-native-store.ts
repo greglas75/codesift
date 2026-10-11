@@ -138,8 +138,10 @@ export async function loadPersistedNativeBM25(
         else byFile.set(symbol.file, [symbol]);
       }
       for (const file of changed) native.updateFile(file, byFile.get(file) ?? []);
-    } catch {
+    } catch (err) {
       // A read that failed must not leave a half-updated index, nor its memory: rebuild instead.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] persisted BM25 catch-up failed (${message}); rebuilding`);
       native.release();
       return null;
     }
