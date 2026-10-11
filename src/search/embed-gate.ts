@@ -28,26 +28,80 @@ function configuredLimit(env: NodeJS.ProcessEnv): number {
 let active = 0;
 const waiting: Array<() => void> = [];
 
-/**
- * Run `fn` with at most `limit` others.
+/*
+ * The same cap, MACHINE-wide (2026-10-11).
  *
- * FIFO, so a batch that has waited longest goes next — a stack would starve the first arrival under
- * sustained load, which is exactly the caller whose timeout is closest to firing.
+ * The counter above is per process, and the daemon embeds each repo in its own child process. With
+ * Ollama back after an outage it started eight children at once — every rdesigner worktree that had
+ * never finished — so eight processes × four slots put ~30 requests in front of a server that
+ * embeds one text at a time. Measured: p50 14.7 s and p90 31 s per request, timeouts, halving, and
+ * a 463k-symbol pass that stopped at 18,688 vectors. Each process obeyed the cap; the machine did
+ * not have one.
+ *
+ * So a slot is also a lock FILE in `<dataDir>/embed-slots/` (file-lock.ts: pid-named, taken over
+ * from a dead owner), and a request runs only while holding one of `limit` of them. Waiting happens
+ * here, before `fn` starts its own timeout, so queueing never counts against a request.
+ * `CODESIFT_EMBED_MACHINE_GATE=0` turns this layer off.
+ */
+const MACHINE_SLOT_POLL_MS = { first: 50, max: 1_000 };
+
+async function acquireMachineSlot(limit: number, slotDir: string): Promise<string> {
+  const { mkdir } = await import("node:fs/promises");
+  const { acquireLock } = await import("../storage/file-lock.js");
+  await mkdir(slotDir, { recursive: true });
+  let delay = MACHINE_SLOT_POLL_MS.first;
+  for (;;) {
+    for (let i = 0; i < limit; i++) {
+      const path = `${slotDir}/slot-${i}.lock`;
+      if ((await acquireLock(path)).held) return path;
+    }
+    // Jittered so waiting processes do not retry in lockstep.
+    await new Promise((resolve) => setTimeout(resolve, delay * (0.5 + Math.random())));
+    delay = Math.min(delay * 2, MACHINE_SLOT_POLL_MS.max);
+  }
+}
+
+async function defaultSlotDir(): Promise<string | null> {
+  try {
+    const { loadConfig } = await import("../config.js");
+    return `${loadConfig().dataDir}/embed-slots`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Run `fn` with at most `limit` others — in this process, and across every process on the machine.
+ *
+ * FIFO within a process, so a batch that has waited longest goes next — a stack would starve the
+ * first arrival under sustained load, which is exactly the caller whose timeout is closest to firing.
  */
 export async function withEmbedSlot<T>(
   fn: () => Promise<T>,
-  options?: { env?: NodeJS.ProcessEnv },
+  options?: { env?: NodeJS.ProcessEnv; slotDir?: string },
 ): Promise<T> {
-  const limit = configuredLimit(options?.env ?? process.env);
+  const env = options?.env ?? process.env;
+  const limit = configuredLimit(env);
   if (limit <= 0) return fn();
 
   if (active >= limit) {
     await new Promise<void>((resolve) => waiting.push(resolve));
   }
   active++;
+  let machineSlot: string | null = null;
   try {
+    if (env["CODESIFT_EMBED_MACHINE_GATE"] !== "0") {
+      // A gate that cannot be set up (no data dir, unwritable) must not stop embedding: the
+      // in-process cap still holds.
+      const slotDir = options?.slotDir ?? (await defaultSlotDir());
+      if (slotDir) machineSlot = await acquireMachineSlot(limit, slotDir).catch(() => null);
+    }
     return await fn();
   } finally {
+    if (machineSlot) {
+      const { releaseLock } = await import("../storage/file-lock.js");
+      await releaseLock(machineSlot);
+    }
     active--;
     // Release in arrival order. `shift()` on an array this short costs nothing, and the ordering is
     // the property that matters.
