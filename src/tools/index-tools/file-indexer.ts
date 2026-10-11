@@ -174,7 +174,9 @@ export async function indexFile(filePath: string): Promise<{
   // refusing would leave the 3,067 already-indexed files searchable forever, since the throwaway
   // checkouts they came from are deleted and nothing will ever touch them again; pruning on the
   // way past means the index heals itself wherever an agent is still working.
-  const excludedBy = walkerExcludedSegment(relPath);
+  const { loadGitIgnored } = await import("../../utils/walk/gitignore.js");
+  const gitIgnored = (await loadGitIgnored(matchingRepo.root))?.isIgnored(relPath) ? ".gitignore" : null;
+  const excludedBy = walkerExcludedSegment(relPath) ?? gitIgnored;
   if (excludedBy !== null) {
     const { removeFileFromIndex } = await import("../../storage/index-store.js");
     await removeFileFromIndex(matchingRepo.index_path, relPath).catch(() => {});

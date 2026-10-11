@@ -5,7 +5,7 @@ import type { ResolvedEntry } from "./types.js";
 
 interface TraversalOptions {
   followSymlinks: boolean;
-  shouldSkipDirectory(name: string): boolean;
+  shouldSkipDirectory(name: string, fullPath: string): boolean;
   onFile(entry: ResolvedEntry): Promise<boolean>;
 }
 
@@ -22,7 +22,7 @@ export async function traverseDirectory(
       if (!resolved) continue;
 
       if (resolved.isDirectory) {
-        if (options.shouldSkipDirectory(entry.name)) continue;
+        if (options.shouldSkipDirectory(entry.name, resolved.fullPath)) continue;
         if (!(await visit(resolved.fullPath))) return false;
       } else if (resolved.isFile && !(await options.onFile(resolved))) {
         return false;

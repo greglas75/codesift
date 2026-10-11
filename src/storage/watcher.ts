@@ -21,6 +21,7 @@
 import * as parcelWatcher from "@parcel/watcher";
 import { relative, join } from "node:path";
 import { IGNORE_DIRS } from "../utils/walk.js";
+import { loadGitIgnored, type GitIgnored } from "../utils/walk/gitignore.js";
 
 /**
  * Re-exported under the historical name so call sites keep working unchanged.
@@ -41,12 +42,17 @@ const watcherTimers = new WeakMap<
  *  - Globs for nested occurrences (`**\/node_modules` style) — handles the
  *    common case where vendored deps live under a workspace.
  */
-function buildIgnoreList(repoRoot: string): string[] {
+function buildIgnoreList(repoRoot: string, gitIgnored: GitIgnored | null): string[] {
   const ignores: string[] = [];
   for (const dir of IGNORE_DIRS) {
     ignores.push(join(repoRoot, dir));
     ignores.push(`**/${dir}`);
     ignores.push(`**/${dir}/**`);
+  }
+  // What git ignores, as absolute paths: the walker skips it, so its events would only index back
+  // files a reindex drops (rdesigner's gitignored zuvo/ copies held 80% of its symbols).
+  for (const entry of gitIgnored?.entries ?? []) {
+    if (entry) ignores.push(join(repoRoot, entry.replace(/\/$/, "")));
   }
   return ignores;
 }
@@ -108,7 +114,7 @@ export async function startWatcher(
         }
       }
     },
-    { ignore: buildIgnoreList(repoRoot) },
+    { ignore: buildIgnoreList(repoRoot, await loadGitIgnored(repoRoot)) },
   );
 
   watcherTimers.set(subscription, debounceTimers);

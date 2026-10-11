@@ -1,6 +1,7 @@
 import { extname, relative } from "node:path";
 import picomatch from "picomatch";
 import type { WalkOptions } from "./types.js";
+import type { GitIgnored } from "./gitignore.js";
 
 const ALWAYS_IGNORED = [
   "node_modules", ".git", "dist", "build", "coverage",
@@ -48,11 +49,11 @@ export const BACKUP_FILE_PATTERNS: RegExp[] = [
 ];
 
 interface FileFilter {
-  shouldSkipDirectory(name: string): boolean;
+  shouldSkipDirectory(name: string, fullPath: string): boolean;
   shouldIncludeFile(fullPath: string, name: string): boolean;
 }
 
-export function createFileFilter(rootPath: string, options: WalkOptions): FileFilter {
+export function createFileFilter(rootPath: string, options: WalkOptions, ignored: GitIgnored | null = null): FileFilter {
   let isExcluded: ((path: string) => boolean) | null = null;
   if (options.excludePatterns && options.excludePatterns.length > 0) {
     try {
@@ -63,8 +64,9 @@ export function createFileFilter(rootPath: string, options: WalkOptions): FileFi
   }
 
   return {
-    shouldSkipDirectory(name: string): boolean {
-      return IGNORE_DIRS.has(name) || name.startsWith(".");
+    shouldSkipDirectory(name: string, fullPath: string): boolean {
+      if (IGNORE_DIRS.has(name) || name.startsWith(".")) return true;
+      return ignored !== null && ignored.isIgnored(`${relative(rootPath, fullPath)}/`);
     },
     shouldIncludeFile(fullPath: string, name: string): boolean {
       if (process.env.CODESIFT_INCLUDE_BACKUPS !== "1" &&
@@ -76,6 +78,7 @@ export function createFileFilter(rootPath: string, options: WalkOptions): FileFi
       if (options.fileFilter && !options.fileFilter(ext, name)) return false;
 
       const relPath = relative(rootPath, fullPath);
+      if (ignored?.isIgnored(relPath)) return false;
       if (options.includePaths && options.includePaths.length > 0 &&
           !options.includePaths.some((prefix) => relPath.startsWith(prefix))) {
         return false;

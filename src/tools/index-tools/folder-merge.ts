@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { isExistingIndexStale } from "./snapshots.js";
 import { IGNORE_DIRS } from "../../utils/walk.js";
+import { loadGitIgnored, type GitIgnored } from "../../utils/walk/gitignore.js";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../../types.js";
 import type { FileHashSnapshot } from "../../storage/hash-snapshot.js";
 import type { IndexFolderResult } from "./types.js";
@@ -42,7 +43,7 @@ export interface FolderMergeResult {
  * forever, so the fix could never actually take effect on the repos that needed
  * it most.
  */
-function countExistingNowExcluded(existing: CodeIndex): number {
+function countExistingNowExcluded(existing: CodeIndex, gitIgnored: GitIgnored | null): number {
   let excluded = 0;
   for (const fe of existing.files) {
     const segments = fe.path.split("/");
@@ -50,6 +51,9 @@ function countExistingNowExcluded(existing: CodeIndex): number {
     // at the leaf (.eslintrc.js) is indexed while a dot-DIRECTORY is not.
     segments.pop();
     if (segments.some((s) => IGNORE_DIRS.has(s) || s.startsWith("."))) excluded++;
+    // What git ignores is excluded too since the walker honours .gitignore — on rdesigner that was
+    // 80% of the old index, a shrink this guard must read as explained, not as a broken walk.
+    else if (gitIgnored?.isIgnored(fe.path)) excluded++;
   }
   return excluded;
 }
@@ -191,7 +195,9 @@ export async function validateAndMergeFolderWalk(
     // truncated and gets rejected forever. Disambiguate by sampling the old
     // index's paths: if most of them no longer exist on disk, the old index
     // is stale dead weight — accept the new result instead of keeping it.
-    const excludedCount = existing.files.length === 0 ? 0 : countExistingNowExcluded(existing);
+    const excludedCount = existing.files.length === 0
+      ? 0
+      : countExistingNowExcluded(existing, await loadGitIgnored(rootPath));
     const excludedFraction = existing.files.length === 0 ? 0 : excludedCount / existing.files.length;
     // What the walk SHOULD still find once the excluded tree is discounted.
     // Re-arming the same 50% drop test against this number is what keeps the

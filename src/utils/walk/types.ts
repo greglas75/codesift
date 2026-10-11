@@ -8,6 +8,8 @@ export interface WalkOptions {
   relative?: boolean | undefined;
   followSymlinks?: boolean | undefined;
   excludePatterns?: string[] | undefined;
+  /** Skip what git ignores under the root (default true; `CODESIFT_RESPECT_GITIGNORE=0` turns it off). */
+  respectGitignore?: boolean | undefined;
 }
 
 export interface ResolvedEntry {

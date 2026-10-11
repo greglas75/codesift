@@ -4,6 +4,7 @@ import { WalkLimits } from "./walk/limits.js";
 import { readStats } from "./walk/errors.js";
 import { traverseDirectory } from "./walk/traversal.js";
 import type { WalkOptions } from "./walk/types.js";
+import { loadGitIgnored } from "./walk/gitignore.js";
 
 export { BACKUP_FILE_PATTERNS, IGNORE_DIRS, toIgnorePatterns };
 export type { WalkOptions } from "./walk/types.js";
@@ -15,7 +16,9 @@ export async function walkDirectory(
   const normalizedOptions = options ?? {};
   const files: string[] = [];
   const limits = new WalkLimits(normalizedOptions.maxFileSize, normalizedOptions.maxFiles);
-  const filters = createFileFilter(rootPath, normalizedOptions);
+  // A walk is a fresh look at the tree, so it takes a fresh listing rather than a cached one.
+  const ignored = normalizedOptions.respectGitignore === false ? null : await loadGitIgnored(rootPath, { fresh: true });
+  const filters = createFileFilter(rootPath, normalizedOptions, ignored);
 
   await traverseDirectory(rootPath, {
     followSymlinks: normalizedOptions.followSymlinks ?? false,
