@@ -321,6 +321,12 @@ impl Bm25 {
         self.doc_count
     }
 
+    /// Whether `finish` has run since the last build batch — what `to_bytes` needs, since build-time
+    /// pending imports are not written.
+    pub fn is_finished(&self) -> bool {
+        self.pending_imports.is_empty()
+    }
+
     fn file_id(&mut self, file: &str) -> u32 {
         if let Some(&id) = self.file_ids.get(file) {
             return id;
@@ -840,9 +846,13 @@ impl Bm25 {
         }
         for _ in 0..r.count()? {
             let f = r.str()?;
+            let c = r.f64()?;
+            if !c.is_finite() || c < 0.0 {
+                return Err(format!("file {f:?} has centrality {c}"));
+            }
             ix.file_ids.insert(f.clone(), ix.files.len() as u32);
             ix.files.push(f);
-            ix.centrality.push(r.f64()?);
+            ix.centrality.push(c);
         }
         let n_vocab = ix.vocab.len() as u32;
         let packed_ok =
@@ -876,7 +886,13 @@ impl Bm25 {
                 }
                 stale.push(p);
             }
-            ix.key_ids.insert(id.clone(), ix.keys.len() as u32);
+            if ix
+                .key_ids
+                .insert(id.clone(), ix.keys.len() as u32)
+                .is_some()
+            {
+                return Err(format!("key {id:?} appears twice"));
+            }
             ix.keys.push(Key {
                 id,
                 alive: flags & 2 == 2,

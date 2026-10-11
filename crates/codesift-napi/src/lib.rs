@@ -419,7 +419,9 @@ impl NativeBm25 {
     }
 
     /// Write the index to `path` off the main thread (temp file, then rename), with `header` — the
-    /// caller's staleness record — up front. Searches keep running while it serialises.
+    /// caller's staleness record — up front. Searches (readers) keep running while it serialises; an
+    /// `updateFile` (a writer) waits for the save to finish, so the caller saves right after a build,
+    /// before edits start arriving.
     #[napi]
     pub fn save_async(&self, path: String, header: String) -> AsyncTask<SaveBm25Task> {
         AsyncTask::new(SaveBm25Task {
@@ -434,6 +436,14 @@ impl NativeBm25 {
     pub fn loaded_header(&self) -> Option<String> {
         self.header.clone()
     }
+
+    /// Free the index's Rust memory now. V8 cannot see those bytes, so a handle dropped without this
+    /// (a loaded index found stale) could keep gigabytes alive until a GC with no reason to run.
+    #[napi]
+    pub fn release(&self) -> napi::Result<()> {
+        *write(&self.inner)? = bm25::Bm25::new();
+        Ok(())
+    }
 }
 
 pub struct SaveBm25Task {
@@ -447,9 +457,22 @@ impl Task for SaveBm25Task {
     type JsValue = ();
 
     fn compute(&mut self) -> napi::Result<()> {
-        let bytes = read(&self.inner)?.to_bytes(&self.header);
+        let bytes = {
+            let ix = read(&self.inner)?;
+            if !ix.is_finished() {
+                return Err(napi::Error::new(
+                    Status::InvalidArg,
+                    "bm25 save: the build has not been finished",
+                ));
+            }
+            ix.to_bytes(&self.header)
+        };
+        // Unique per save, not per process: two saves of one path in this process must not share a temp
+        // file. `.tmp.<pid>.<n>` still reads as this writer's to the orphan sweeper.
+        static SAVES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = SAVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut tmp = self.path.clone().into_os_string();
-        tmp.push(format!(".tmp.{}", std::process::id()));
+        tmp.push(format!(".tmp.{}.{n}", std::process::id()));
         let tmp = PathBuf::from(tmp);
         let written = std::fs::write(&tmp, &bytes).and_then(|_| std::fs::rename(&tmp, &self.path));
         if let Err(e) = written {

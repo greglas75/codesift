@@ -83,7 +83,10 @@ function parseHeader(raw: string | null): Header | null {
     const h = JSON.parse(raw) as Partial<Header>;
     if (typeof h.format !== "number" || typeof h.codesift !== "string" || typeof h.extractor !== "string") return null;
     if (!Array.isArray(h.files)) return null;
-    return h as Header;
+    const wellFormed = h.files.every(
+      (e) => Array.isArray(e) && e.length === 2 && typeof e[0] === "string" && typeof e[1] === "string",
+    );
+    return wellFormed ? (h as Header) : null;
   } catch {
     return null;
   }
@@ -113,7 +116,11 @@ export async function loadNativeBM25(
   }
   const saved = parseHeader(native.loadedHeader);
   const changed = saved ? filesToReapply(saved, code) : null;
-  if (!changed) return null;
+  if (!changed) {
+    // Its Rust memory is invisible to V8; leaving it to a GC could hold gigabytes for nothing.
+    native.release();
+    return null;
+  }
 
   if (changed.length > 0) {
     // One pass groups the symbols of the changed files; updateBM25ForFile would walk every symbol per file.

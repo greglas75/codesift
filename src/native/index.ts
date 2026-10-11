@@ -94,6 +94,8 @@ export interface NativeBm25Handle {
   saveAsync(path: string, header: string): Promise<void>;
   /** The header a persisted index was saved with, when it came from `loadBm25`; null when built. */
   readonly loadedHeader: string | null;
+  /** Free the Rust memory now (V8 cannot see it); the handle answers as an empty index afterwards. */
+  release(): void;
 }
 
 /** One file's extraction (ADR-006 stage 3). */

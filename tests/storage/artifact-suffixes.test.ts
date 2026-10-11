@@ -34,7 +34,7 @@ describe("prune recognises every artifact the storage layer creates", () => {
       getPartialEmbeddingPath(INDEX_PATH),
       INDEX_PATH.replace(/\.index\.json$/, ".snapshot.json"),
       nativeBm25PathFor(INDEX_PATH),
-      `${nativeBm25PathFor(INDEX_PATH)}.tmp.12345`,
+      `${nativeBm25PathFor(INDEX_PATH)}.tmp.12345.0`,
     ];
     for (const p of produced) {
       expect(re.test(basename(p)), `prune would not reclaim ${basename(p)}`).toBe(true);
