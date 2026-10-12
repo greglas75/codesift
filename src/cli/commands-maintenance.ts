@@ -335,17 +335,25 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
   // machine: 149 temp files holding 11.15 GB, the oldest from 31 July, surviving a `prune` that had
   // run the day before and reported success.
   //
-  // A temp file is never live data by construction: readers open the target name, never the tail.
-  // The rules that decide are therefore the same two the in-process sweeper uses — an hour of age,
+  // A temp file is never live data by construction: readers open the target name, never the tail —
+  // with one exception, chunk generations, handled below. The rules that decide are therefore the same two the in-process sweeper uses — an hour of age,
   // and a writer that is no longer running — not registry membership.
   const tempTail = /\.(?:tmp|generation|seeding)\./;
   const orphanTempAgeMs = 60 * 60 * 1000;
-  const { writerPidIsAlive, PID_TRUST_WINDOW_MS: pidTrustWindowMs } = await import("../storage/_shared.js");
+  const { writerPidIsAlive, PID_TRUST_WINDOW_MS: pidTrustWindowMs, chunkGenerationsInUse } =
+    await import("../storage/_shared.js");
+  // The exception: chunk-store publishes BY generation name, so the generation files a manifest
+  // points at are what readers open — see chunkGenerationsInUse.
+  const liveGenerations = chunkGenerationsInUse(dataDir);
   let files = 0, bytes = 0, kept = 0;
   for (const name of readdirSync(dataDir)) {
     const m = re.exec(name);
     if (!m) continue;
     const isTempTail = tempTail.test(name);
+    if (liveGenerations.has(name)) {
+      // A live generation of a repo being dropped is collected like the rest of its artifacts.
+      if (live.has(m[1]!) || staleHashes.has(m[1]!)) { kept++; continue; }
+    }
     // A stale entry removed during THIS run gets one full run of retention.
     // The next prune re-evaluates its database metadata before collecting it.
     if (!isTempTail && (live.has(m[1]!) || staleHashes.has(m[1]!))) { kept++; continue; }

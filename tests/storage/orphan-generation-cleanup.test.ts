@@ -50,6 +50,17 @@ describe("orphaned generation files", () => {
     expect(existsSync(live)).toBe(true);
   });
 
+  // Bug: the published chunk index IS a generation file, so it looked abandoned once its writer exited.
+  it("leaves the generation file a chunk manifest points at", async () => {
+    const published = `${target}.generation.4194304.11111111-2222-3333-4444-555555555555`;
+    makeOld(published, 2 * HOUR);
+    writeFileSync(join(dir, "abc123.chunk-index.json"), JSON.stringify({
+      version: 1, chunks: published.slice(dir.length + 1), embeddings: "abc123.chunk-embeddings.ndjson.generation.x",
+    }));
+    expect(await cleanupOrphanTempFiles(target)).toBe(0);
+    expect(existsSync(published)).toBe(true);
+  });
+
   it("leaves a recent orphan alone, so a concurrent writer is never raced", async () => {
     const fresh = `${target}.generation.4194304.11111111-2222-3333-4444-555555555555`;
     writeFileSync(fresh, "x");

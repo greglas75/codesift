@@ -1,5 +1,35 @@
+import { readdirSync, readFileSync } from "node:fs";
 import { writeFile, rename, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+
+/**
+ * Names of the `.generation.*` files that a chunk manifest (`<hash>.chunk-index.json`) currently
+ * points at. Those are LIVE data, not abandoned writes.
+ *
+ * chunk-store publishes a chunk index by writing `<target>.generation.<pid>.<uuid>` and switching the
+ * manifest to it; the generation file is never renamed to the target. Both sweepers treated every
+ * `.generation.` name as the half of an interrupted write and deleted it once it was an hour old and
+ * its writer had exited — i.e. every published chunk index, shortly after its embedding run ended.
+ * Measured 2026-10-12: 68 of 70 manifests pointed at files that no longer existed, so chunk vectors
+ * were computed for hours and then reclaimed, and semantic search ran without them.
+ *
+ * Unreadable or malformed manifests protect nothing; the read is best effort, like the sweep.
+ */
+export function chunkGenerationsInUse(dir: string): Set<string> {
+  const inUse = new Set<string>();
+  let entries: string[];
+  try { entries = readdirSync(dir); } catch { return inUse; }
+  for (const entry of entries) {
+    if (!entry.endsWith(".chunk-index.json")) continue;
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, entry), "utf-8")) as { chunks?: unknown; embeddings?: unknown };
+      for (const name of [manifest.chunks, manifest.embeddings]) {
+        if (typeof name === "string" && name === basename(name)) inUse.add(name);
+      }
+    } catch { /* unreadable manifest — nothing to protect */ }
+  }
+  return inUse;
+}
 
 /**
  * Delete abandoned `<target>.tmp.*` siblings left by an interrupted atomic write.
@@ -27,10 +57,13 @@ export async function cleanupOrphanTempFiles(
   // long dead. They are invisible to `prune` too until the pattern above learns the tail.
   const prefixes = [`${base}.tmp.`, `${base}.generation.`];
   let removed = 0;
+  // Read only when a generation file is actually a candidate: most sweeps find none.
+  let inUse: Set<string> | null = null;
   try {
     const cutoff = Date.now() - minAgeMs;
     for (const entry of await readdir(dir)) {
       if (!prefixes.some((prefix) => entry.startsWith(prefix))) continue;
+      if (entry.startsWith(`${base}.generation.`) && (inUse ??= chunkGenerationsInUse(dir)).has(entry)) continue;
       // A generation file whose WRITER IS STILL RUNNING is an in-flight write, not an orphan. The
       // age guard alone would eventually delete one: a large embedding batch can outlive the hour,
       // and deleting it mid-write turns a slow save into a corrupt one.

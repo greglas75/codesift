@@ -97,6 +97,24 @@ describe("codesift prune", () => {
     expect(existsSync(inflight)).toBe(true);
   });
 
+  // Bug: chunk-store publishes BY generation name, and prune read every `.generation.` file as an
+  // abandoned write — 68 of 70 chunk manifests here pointed at files prune had deleted.
+  it("keeps the chunk generation a manifest points at, and collects a superseded one", async () => {
+    const twoHours = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const live = `${LIVE}.chunk-embeddings.ndjson.generation.${DEAD_PID}.live`;
+    const superseded = `${LIVE}.chunk-embeddings.ndjson.generation.${DEAD_PID}.old`;
+    for (const name of [live, superseded]) {
+      writeFileSync(join(dir, name), "v\n");
+      utimesSync(join(dir, name), twoHours, twoHours);
+    }
+    writeFileSync(join(dir, `${LIVE}.chunk-index.json`), JSON.stringify({ version: 1, chunks: "x", embeddings: live }));
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+
+    expect(existsSync(join(dir, live))).toBe(true);
+    expect(existsSync(join(dir, superseded))).toBe(false);
+  });
+
   it("gives a temp half the sweeper's hour, not the 5-minute artifact grace", async () => {
     // Ten minutes is past the artifact grace and well inside the hour a large write can take.
     const recent = join(dir, `${LIVE}.bm25.ndjson.tmp.${DEAD_PID}`);
