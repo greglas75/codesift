@@ -280,7 +280,10 @@ export async function readVectorFile(path: string, opts: ReadVectorFileOptions =
     // not an array of whatever length it claims.
     if (
       typeof dims !== "number" || typeof count !== "number" || !Number.isInteger(dims) || !Number.isInteger(count) ||
-      dims < 0 || count < 0 || count > size || dims > size
+      dims < 0 || count < 0 || count > size || dims > size ||
+      // The smallest file this header can describe (empty ids): per vector a length, a flag, a hash
+      // and its row. Bounds the product, not each factor, before `new Array(count)`.
+      count * (9 + dims * 4) + 12 + head.readUInt32LE(8) + 8 > size
     ) {
       throw new VectorFileError("bad header");
     }

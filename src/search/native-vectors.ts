@@ -139,6 +139,7 @@ async function withNativeSet<T>(src: NativeVectorSource, use: (set: NativeVector
   if (set.count === 0 || set.dims === 0) return null;
   try {
     await ensureFiles(entry, set, src);
+    if (entry.retired) return null; // released while the files were attached
   } catch (err) {
     // The set loaded fine; only the file list failed (e.g. SQLITE_BUSY behind an indexer's write).
     // Keep the set — dropping it would turn a transient lock into a multi-second reload — and answer
@@ -148,7 +149,10 @@ async function withNativeSet<T>(src: NativeVectorSource, use: (set: NativeVector
     return null;
   }
   try {
-    return await use(set);
+    const out = await use(set);
+    // Released under the search: what it returned (no hits, width 0) describes the release, not
+    // the vectors. The TypeScript path answers this call.
+    return entry.retired ? null : out;
   } catch (err) {
     return dropAfterFailure(src.set, entry, err);
   }

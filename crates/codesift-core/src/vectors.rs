@@ -210,7 +210,14 @@ impl Vectors {
         let (dims, count) = (header.dims, header.count);
         // Every size below is checked against the file before it is allocated or multiplied: a
         // damaged header must be an error, not an allocation of whatever it claims.
-        if count > size || dims > size {
+        // The smallest file such a header can describe (empty ids): checked before `ids` reserves
+        // 24 bytes per claimed entry, which a bound of `count <= size` alone would allow 24x over.
+        let smallest = dims
+            .checked_mul(4)
+            .and_then(|row| row.checked_add(9)) // id length + flag + hash, per vector
+            .and_then(|per| per.checked_mul(count))
+            .and_then(|m| m.checked_add(12 + header_len + 8));
+        if count > size || dims > size || smallest.is_none_or(|m| m > size) {
             return Err(invalid("bad header"));
         }
         let mut ids = Vec::with_capacity(count);
