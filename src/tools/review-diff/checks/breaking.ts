@@ -6,6 +6,14 @@ const TS_JS_RE = /\.(tsx?|jsx?)$/;
 const EXPORT_NAMED_RE =
   /export\s+(?:async\s+)?(?:function|class|const|let|var|type|interface|enum)\s+(\w+)/g;
 const EXPORT_DEFAULT_RE = /export\s+default/g;
+const SHOW_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** git's own wording for `<ref>:<path>` naming a path the ref does not have. */
+function isPathAbsentAtRef(err: unknown): boolean {
+  const e = err as { message?: unknown; stderr?: unknown };
+  const text = `${String(e?.message ?? "")}\n${String(e?.stderr ?? "")}`;
+  return /does not exist in '|exists on disk, but not in '/.test(text);
+}
 
 /**
  * Breaking changes check: detect exported symbols removed between `since` and
@@ -98,11 +106,15 @@ async function findRemovedExports(
     oldSource = execFileSync(
       "git",
       ["show", `${since}:${file}`],
-      { cwd: repoRoot, encoding: "utf-8", timeout: 10_000 },
+      // Node's default maxBuffer is 1 MB: a larger old file threw ENOBUFS, which the catch below
+      // read as "new file" — so exports removed from big files were never reported.
+      { cwd: repoRoot, encoding: "utf-8", timeout: 10_000, maxBuffer: SHOW_MAX_BUFFER },
     );
-  } catch {
-    // git show failed -> file didn't exist at `since` (new file), skip.
-    return [];
+  } catch (err) {
+    // Only a path that did not exist at `since` is a new file. Anything else (overflow, timeout,
+    // a bad ref) fails the check instead of passing it silently.
+    if (isPathAbsentAtRef(err)) return [];
+    throw err;
   }
 
   const oldExports = extractExportNames(oldSource);
