@@ -10,7 +10,8 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadEmbeddings, contentHashesForPath } from "../../src/storage/embedding-store.js";
-import { cloneVectorsFromNearestDonor, seedEmbeddingsFromDonor } from "../../src/tools/index-tools/worktree-seed-embeddings.js";
+import { cloneChunksFromNearestDonor, cloneVectorsFromNearestDonor, seedEmbeddingsFromDonor } from "../../src/tools/index-tools/worktree-seed-embeddings.js";
+import { loadChunkManifest, loadChunkVectorsForReuse } from "../../src/storage/chunk-store.js";
 
 let dir: string;
 const DONOR = "local/repo";
@@ -206,6 +207,28 @@ describe("cloneVectorsFromNearestDonor", () => {
     }
     expect(result.vectors).toBe(1);
     expect(readFileSync(partial, "utf-8")).toBe(JSON.stringify({ model: "embeddinggemma" }) + "\n");
+  });
+
+  // Bug: the chunk pass had no clone, so every worktree embedded every chunk from scratch.
+  it("clones a sibling's published chunk generation, ids rebased for reuse", async () => {
+    register(git(["rev-parse", "HEAD"]));
+    writeFileSync(join(dir, "donor.chunks.ndjson.generation.g"), JSON.stringify({
+      id: `${DONOR}:a.ts:1`, file: "a.ts", startLine: 1, endLine: 1, text: "a", tokenCount: 1,
+    }) + "\n");
+    writeFileSync(join(dir, "donor.chunk-embeddings.ndjson.generation.g"), JSON.stringify({ id: `${DONOR}:a.ts:1`, vec: [1, 0], h: 5 }) + "\n");
+    writeFileSync(join(dir, "donor.chunk-index.json"), JSON.stringify({
+      version: 1, chunks: "donor.chunks.ndjson.generation.g", embeddings: "donor.chunk-embeddings.ndjson.generation.g", model: "m",
+    }));
+
+    const result = await cloneChunksFromNearestDonor(repo, TARGET, targetIndex(), "m");
+
+    if (!result.seeded) {
+      expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
+      return;
+    }
+    const manifest = await loadChunkManifest(join(dir, "target.chunks.ndjson"));
+    const reused = await loadChunkVectorsForReuse(join(dir, "target.chunk-embeddings.ndjson"), manifest);
+    expect([...reused.hashes]).toEqual([[`${TARGET}:a.ts:1`, 5]]);
   });
 
   it("ignores a checkout whose commit is not in this tree's history", async () => {

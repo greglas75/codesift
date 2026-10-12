@@ -31,9 +31,10 @@ import {
 } from "../../storage/embedding-store.js";
 import {
   saveChunkIndex,
-  loadChunkEmbeddings,
+  loadChunkVectorsForReuse,
   getChunkPath,
   getChunkEmbeddingPath,
+  getPartialChunkEmbeddingPath,
 } from "../../storage/chunk-store.js";
 import { chunkFile, chunkBySymbols } from "../../search/chunker.js";
 import { loadConfig } from "../../config.js";
@@ -417,40 +418,103 @@ export async function embedChunks(
 
   const chunkPath = getChunkPath(indexPath);
   const chunkEmbeddingPath = getChunkEmbeddingPath(indexPath);
+  const partialPath = getPartialChunkEmbeddingPath(indexPath);
+  const cacheKey = `${repoName}:chunks`;
+  let checkpoint: EmbeddingCheckpoint | null = null;
   try {
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
-    const existingChunkEmbeddings = await loadChunkEmbeddings(chunkEmbeddingPath) ?? new Map<string, Float32Array>();
+
+    // Same three protections the symbol pass has, which this pass lacked: a checkout with nothing of
+    // its own starts from its nearest sibling's chunks, vectors are reused by content hash across
+    // processes, and each finished batch is checkpointed. Without them every worktree of a large
+    // repo re-embedded every chunk, and a restart threw the pass away. Best effort, like the rest.
+    try {
+      const { cloneChunksFromNearestDonor } = await import("./worktree-seed-embeddings.js");
+      const cloned = await cloneChunksFromNearestDonor(rootPath, repoName, indexPath, provider.model);
+      if (cloned.seeded) {
+        console.error(
+          `[codesift] ${repoName}: cloned chunk vectors from ${cloned.donor} ` +
+          `(${cloned.distance} commit(s) back) — embedding only the chunks that differ`,
+        );
+      }
+    } catch { /* no donor; embed from scratch */ }
+
+    // Only vectors written by this model, with hashes beside them, can be reused: older generations
+    // carry neither, and their chunks are re-embedded once.
+    const { reusableChunkManifest } = await import("./worktree-seed-embeddings.js");
+    const manifest = await reusableChunkManifest(indexPath, provider.model);
+    const main = manifest
+      ? await loadChunkVectorsForReuse(chunkEmbeddingPath, manifest)
+      : { vectors: new Map<string, Float32Array>(), hashes: new Map<string, number>() };
+    const existing = main.vectors;
+
+    const opened = await EmbeddingCheckpoint.open(partialPath, provider.model);
+    if ("busy" in opened) {
+      const who = opened.busy === process.pid
+        ? "this process is already embedding chunks and holds"
+        : opened.busy > 0 ? `another process (pid ${opened.busy}) holds` : "could not lock";
+      console.error(`[codesift] ${repoName}: ${who} the chunk checkpoint — running without one`);
+    } else {
+      checkpoint = opened;
+      const decision = await checkpoint.decide();
+      if (decision.note) console.error(`[codesift] ${repoName}: chunks: ${decision.note}`);
+      if (decision.resume) {
+        const resumed = await loadChunkVectorsForReuse(partialPath);
+        for (const [id, vec] of resumed.vectors) existing.set(id, vec);
+        // NEWER than the published generation, so primed first (priming never overwrites).
+        primeContentHashes(cacheKey, resumed.hashes);
+        if (resumed.vectors.size > 0) {
+          console.error(`[codesift] ${repoName}: resuming chunk embedding with ${resumed.vectors.size} vectors already done`);
+        }
+      }
+      await checkpoint.prepareForAppend();
+    }
+    primeContentHashes(cacheKey, main.hashes);
+
     const allChunks = await readAndChunkFiles(fileEntries, rootPath, repoName, symbols);
 
     if (allChunks.length > 0) {
       const chunkTexts = new Map(allChunks.map((c) => [c.id, c.text]));
       const chunkEmbeddings = await batchEmbed(
         chunkTexts,
-        existingChunkEmbeddings,
+        existing,
         (texts) => provider.embed(texts, "document"),
         CHUNK_EMBEDDING_BATCH_SIZE,
-        `${repoName}:chunks`,
+        cacheKey,
         // Chunks were the ONLY embedding path that never passed model identity, so they sat
         // outside the cross-repo cache entirely: every worktree re-embedded chunk text that was
         // byte-identical to its parent checkout. Measured 2026-08-09 — chunk embeddings are
         // 8.25 GB across 30 files, the second largest thing in the data dir, and not one byte of
         // it was ever eligible for a lookup. The symbol path ~85 lines above always passed this.
         { model: provider.model, dimensions: provider.dimensions },
+        checkpoint ? (done) => checkpoint!.append(done) : undefined,
       );
       // A semantic query may have populated the process-wide cache before this
       // re-index. Invalidate before the first publication so a failed second
       // write cannot leave the old generation resident.
-      invalidateEmbeddingCache(`${repoName}:chunks`);
-      await saveChunkIndex(chunkPath, allChunks, chunkEmbeddingPath, chunkEmbeddings);
+      invalidateEmbeddingCache(cacheKey);
+      await saveChunkIndex(chunkPath, allChunks, chunkEmbeddingPath, chunkEmbeddings, {
+        hashes: contentHashesFor(cacheKey),
+        model: provider.model,
+      });
       // Close the publication window: a query may have loaded the old manifest
       // after the first bump but before the atomic manifest swap.
-      invalidateEmbeddingCache(`${repoName}:chunks`);
+      invalidateEmbeddingCache(cacheKey);
     }
+    // Folded into the published generation — only now is it safe to drop.
+    await checkpoint?.discard();
     return true;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[codesift] Chunk embedding failed for ${repoName}: ${message}`);
+    const progress = checkpoint?.progress;
+    const kept = progress && progress.written > 0
+      ? ` — ${progress.written} vectors kept, the next run resumes from them`
+      : "";
+    const lost = progress?.error ? ` (checkpointing failed: ${progress.error})` : "";
+    console.error(`[codesift] Chunk embedding failed for ${repoName}: ${message}${kept}${lost}`);
     return false;
+  } finally {
+    await checkpoint?.release();
   }
 }
 

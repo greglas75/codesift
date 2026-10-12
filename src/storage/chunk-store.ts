@@ -27,6 +27,18 @@ export function getChunkEmbeddingPath(indexPath: string): string {
   return indexPath.replace(/\.index\.json$/, ".chunk-embeddings.ndjson");
 }
 
+/**
+ * Chunk vectors a run has computed but not yet published — the chunk twin of
+ * `getPartialEmbeddingPath`, same format (a `{model}` header, then `{id, vec, h}` lines).
+ * {hash}.index.json → {hash}.chunk-embeddings.partial.ndjson
+ *
+ * The chunk pass was the one embedding pass with no checkpoint: on a ~460k-symbol repo it runs for
+ * hours after the symbol pass, and every restart of the machine or the daemon threw it all away.
+ */
+export function getPartialChunkEmbeddingPath(indexPath: string): string {
+  return indexPath.replace(/\.index\.json$/, ".chunk-embeddings.partial.ndjson");
+}
+
 // ---------------------------------------------------------------------------
 // Chunk persistence
 // ---------------------------------------------------------------------------
@@ -40,13 +52,23 @@ interface ChunkLine {
   tokenCount: number;
 }
 
-interface ChunkIndexManifest {
+export interface ChunkIndexManifest {
   version: 1;
   chunks: string;
   embeddings: string;
+  /**
+   * The model that produced the vectors, and the marker that its lines carry content hashes.
+   * Absent in manifests written before 2026-10-12, whose vectors cannot be reused by content.
+   */
+  model?: string;
+  /**
+   * Set on a generation CLONED from another checkout: its ids still carry the donor's prefix.
+   * Only the embedding run rewrites them; a query reads chunks and vectors with the same ids.
+   */
+  id_rebase?: { from: string; to: string };
 }
 
-function getChunkManifestPath(filePath: string): string {
+export function getChunkManifestPath(filePath: string): string {
   if (filePath.endsWith(".chunks.ndjson")) {
     return filePath.replace(/\.chunks\.ndjson$/, ".chunk-index.json");
   }
@@ -56,7 +78,8 @@ function getChunkManifestPath(filePath: string): string {
   return `${filePath}.chunk-index.json`;
 }
 
-async function loadChunkManifest(filePath: string): Promise<ChunkIndexManifest | null> {
+/** The manifest beside `filePath` (a chunk or chunk-embedding path), or null when there is none. */
+export async function loadChunkManifest(filePath: string): Promise<ChunkIndexManifest | null> {
   let raw: string;
   try {
     const { readFile } = await import("node:fs/promises");
@@ -289,6 +312,11 @@ export async function loadChunks(
 interface ChunkEmbeddingLine {
   id: string;
   vec: number[];
+  /**
+   * Content hash of the chunk text, as on symbol vector lines. Without it a fresh process could not
+   * tell an unchanged chunk from a changed one and re-embedded every chunk on every run.
+   */
+  h?: number;
 }
 
 /**
@@ -298,6 +326,7 @@ interface ChunkEmbeddingLine {
 export async function saveChunkEmbeddings(
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
+  hashes?: ReadonlyMap<string, number>,
 ): Promise<void> {
   // Stream line-by-line. The previous version built one big `lines.join("\n")`
   // string, which threw `RangeError: Invalid string length` once the combined
@@ -315,7 +344,10 @@ export async function saveChunkEmbeddings(
 
   try {
     for (const [id, vec] of embeddings) {
-      const line = JSON.stringify({ id, vec: Array.from(vec) } satisfies ChunkEmbeddingLine) + "\n";
+      const h = hashes?.get(id);
+      const line = JSON.stringify(
+        (h === undefined ? { id, vec: Array.from(vec) } : { id, vec: Array.from(vec), h }) satisfies ChunkEmbeddingLine,
+      ) + "\n";
       if (!stream.write(line)) {
         await once(stream, "drain");
       }
@@ -342,6 +374,7 @@ export async function saveChunkIndex(
   chunks: CodeChunk[],
   embeddingPath: string,
   embeddings: Map<string, Float32Array>,
+  vectors?: { hashes: ReadonlyMap<string, number>; model: string },
 ): Promise<void> {
   const generation = `${process.pid}.${randomUUID()}`;
   const generationChunkPath = `${chunkPath}.generation.${generation}`;
@@ -351,11 +384,12 @@ export async function saveChunkIndex(
   const { rename, unlink, writeFile } = await import("node:fs/promises");
   try {
     await saveChunks(generationChunkPath, chunks);
-    await saveChunkEmbeddings(generationEmbeddingPath, embeddings);
+    await saveChunkEmbeddings(generationEmbeddingPath, embeddings, vectors?.hashes);
     const manifest: ChunkIndexManifest = {
       version: 1,
       chunks: basename(generationChunkPath),
       embeddings: basename(generationEmbeddingPath),
+      ...(vectors ? { model: vectors.model } : {}),
     };
     await writeFile(manifestTmpPath, `${JSON.stringify(manifest)}\n`, "utf8");
     await rename(manifestTmpPath, manifestPath);
@@ -396,4 +430,29 @@ export async function loadChunkEmbeddings(
     },
     (parsed) => (parsed as ChunkEmbeddingLine).id,
   );
+}
+
+/**
+ * Chunk vectors with their content hashes, for an embedding run to reuse — from the published
+ * generation (`manifest`, ids rebased when it is a clone) or from a checkpoint file (no manifest).
+ * Lines without a hash come back as vectors without one, which the run re-embeds.
+ */
+export async function loadChunkVectorsForReuse(
+  path: string,
+  manifest?: ChunkIndexManifest | null,
+): Promise<{ vectors: Map<string, Float32Array>; hashes: Map<string, number> }> {
+  const hashes = new Map<string, number>();
+  const rebase = manifest?.id_rebase;
+  const activePath = manifest ? join(dirname(path), manifest.embeddings) : path;
+  const vectors = await loadNdjsonMap<string, Float32Array>(
+    activePath,
+    isChunkEmbeddingLine,
+    (parsed) => {
+      const line = parsed as ChunkEmbeddingLine;
+      const id = rebase && line.id.startsWith(rebase.from) ? rebase.to + line.id.slice(rebase.from.length) : line.id;
+      if (typeof line.h === "number") hashes.set(id, line.h);
+      return [id, new Float32Array(line.vec)];
+    },
+  );
+  return { vectors: vectors ?? new Map(), hashes };
 }

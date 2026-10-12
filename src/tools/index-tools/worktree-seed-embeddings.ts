@@ -23,9 +23,18 @@
  * search skips ids missing from the index, so neither returns a wrong symbol.
  */
 import { execFile } from "node:child_process";
-import { constants, existsSync } from "node:fs";
-import { copyFile, rename, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { constants, existsSync, statSync } from "node:fs";
+import { copyFile, rename, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
+import {
+  getChunkEmbeddingPath,
+  getChunkManifestPath,
+  getChunkPath,
+  loadChunkManifest,
+  type ChunkIndexManifest,
+} from "../../storage/chunk-store.js";
 import {
   getEmbeddingMetaPath,
   getEmbeddingPath,
@@ -145,22 +154,104 @@ export async function cloneVectorsFromNearestDonor(
   indexPath: string,
 ): Promise<EmbeddingSeedResult & { donor?: string; distance?: number }> {
   if (await hasSymbolEmbeddings(indexPath)) return { seeded: false, reason: "has vectors of its own" };
+  const best = await nearestDonor(rootPath, repoName, hasSymbolEmbeddings);
+  if (best === null) return { seeded: false, reason: "no git history to place a donor in" };
+  if (!best) return { seeded: false, reason: "no indexed checkout in this history has vectors" };
+
+  const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);
+  return { ...result, donor: best.name, distance: best.distance };
+}
+
+/**
+ * The registered checkout nearest in this tree's history for which `has(index_path)` holds.
+ * `null` when the tree has no history to place one in, `undefined` when none qualifies.
+ */
+async function nearestDonor(
+  rootPath: string,
+  repoName: string,
+  has: (indexPath: string) => Promise<boolean>,
+): Promise<{ name: string; index_path: string; distance: number } | null | undefined> {
   const { headHistory } = await import("./worktree-seed.js");
   const { listRepos } = await import("../../storage/registry.js");
   const { loadConfig } = await import("../../config.js");
   const history = await headHistory(rootPath);
-  if (history.size === 0) return { seeded: false, reason: "no git history to place a donor in" };
+  if (history.size === 0) return null;
 
   let best: { name: string; index_path: string; distance: number } | undefined;
   for (const candidate of await listRepos(loadConfig().registryPath).catch(() => [])) {
     if (candidate.name === repoName || !candidate.last_git_commit) continue;
     const distance = history.get(candidate.last_git_commit);
     if (distance === undefined || (best && distance >= best.distance)) continue;
-    if (!(await hasSymbolEmbeddings(candidate.index_path))) continue;
+    if (!(await has(candidate.index_path))) continue;
     best = { name: candidate.name, index_path: candidate.index_path, distance };
   }
-  if (!best) return { seeded: false, reason: "no indexed checkout in this history has vectors" };
+  return best;
+}
 
-  const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);
-  return { ...result, donor: best.name, distance: best.distance };
+/**
+ * The published chunk manifest of `indexPath` when its vectors can be reused by content: written by
+ * `model` (which also marks hashed lines) and pointing at a non-empty vector file that exists.
+ */
+export async function reusableChunkManifest(indexPath: string, model: string): Promise<ChunkIndexManifest | null> {
+  const manifest = await loadChunkManifest(getChunkPath(indexPath)).catch(() => null);
+  if (manifest?.model !== model) return null;
+  try {
+    return statSync(join(dirname(indexPath), manifest.embeddings)).size > 0 ? manifest : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Chunk twin of `cloneVectorsFromNearestDonor`: before a chunk pass starts from nothing, clone the
+ * published chunk generation of the nearest checkout that has one, so the pass embeds only what
+ * differs.
+ *
+ * Measured 2026-10-12: no rdesigner checkout had ever finished a chunk pass — each worktree started
+ * it from zero, behind its own symbol pass, and lost it on the next restart. The clone takes BOTH
+ * files of the generation (chunk text and vectors), so a query on this checkout reads a consistent
+ * pair at once; the ids keep the donor's prefix, recorded as `id_rebase` for the embedding run.
+ */
+export async function cloneChunksFromNearestDonor(
+  rootPath: string,
+  repoName: string,
+  indexPath: string,
+  model: string,
+): Promise<EmbeddingSeedResult & { donor?: string; distance?: number }> {
+  if (await reusableChunkManifest(indexPath, model)) return { seeded: false, reason: "has chunk vectors of its own" };
+  const best = await nearestDonor(rootPath, repoName, async (p) => (await reusableChunkManifest(p, model)) !== null);
+  if (best === null) return { seeded: false, reason: "no git history to place a donor in" };
+  if (!best) return { seeded: false, reason: "no indexed checkout in this history has chunk vectors" };
+  const donor = await reusableChunkManifest(best.index_path, model);
+  if (!donor) return { seeded: false, reason: "donor chunk vectors vanished" };
+
+  const donorDir = dirname(best.index_path);
+  const generation = `${process.pid}.${randomUUID()}`;
+  const chunks = `${getChunkPath(indexPath)}.generation.${generation}`;
+  const vectors = `${getChunkEmbeddingPath(indexPath)}.generation.${generation}`;
+  const manifestPath = getChunkManifestPath(getChunkPath(indexPath));
+  const manifestTmp = `${manifestPath}.tmp.${generation}`;
+  try {
+    await cloneFile(join(donorDir, donor.chunks), chunks);
+    await cloneFile(join(donorDir, donor.embeddings), vectors);
+  } catch (err) {
+    await Promise.all([unlink(chunks).catch(() => undefined), unlink(vectors).catch(() => undefined)]);
+    const code = (err as NodeJS.ErrnoException).code ?? "error";
+    return { seeded: false, reason: `filesystem cannot clone the chunk files (${code}) — not copying them` };
+  }
+  try {
+    const manifest: ChunkIndexManifest = {
+      version: 1,
+      chunks: basename(chunks),
+      embeddings: basename(vectors),
+      model,
+      id_rebase: { from: donor.id_rebase?.from ?? `${best.name}:`, to: `${repoName}:` },
+    };
+    await writeFile(manifestTmp, `${JSON.stringify(manifest)}\n`, "utf8");
+    await rename(manifestTmp, manifestPath);
+  } catch (err) {
+    await Promise.all([chunks, vectors, manifestTmp].map((p) => unlink(p).catch(() => undefined)));
+    return { seeded: false, reason: `chunk seed failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  return { seeded: true, donor: best.name, distance: best.distance };
 }

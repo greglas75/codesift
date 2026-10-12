@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { basename } from "node:path";
 import { ARTIFACT_SUFFIXES, artifactPattern, writerPidIsAlive } from "../../src/storage/_shared.js";
-import { getChunkPath, getChunkEmbeddingPath } from "../../src/storage/chunk-store.js";
+import { getChunkPath, getChunkEmbeddingPath, getPartialChunkEmbeddingPath } from "../../src/storage/chunk-store.js";
 import { sqlitePathFor, getIndexPath } from "../../src/storage/index-store.js";
 import { getPartialEmbeddingPath } from "../../src/storage/embedding-store.js";
 import { nativeBm25PathFor } from "../../src/search/bm25-native-store.js";
@@ -32,6 +32,8 @@ describe("prune recognises every artifact the storage layer creates", () => {
       INDEX_PATH.replace(/\.index\.json$/, ".embeddings.ndjson"),
       INDEX_PATH.replace(/\.index\.json$/, ".embeddings.meta.json"),
       getPartialEmbeddingPath(INDEX_PATH),
+      getPartialChunkEmbeddingPath(INDEX_PATH),
+      `${getPartialChunkEmbeddingPath(INDEX_PATH)}.lock`,
       INDEX_PATH.replace(/\.index\.json$/, ".snapshot.json"),
       nativeBm25PathFor(INDEX_PATH),
       `${nativeBm25PathFor(INDEX_PATH)}.tmp.12345.0`,

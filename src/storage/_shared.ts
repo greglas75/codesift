@@ -217,6 +217,8 @@ export const ARTIFACT_SUFFIXES = [
   "embeddings.partial.ndjson.lock",
   "chunks.ndjson",
   "chunk-embeddings.ndjson",
+  "chunk-embeddings.partial.ndjson",
+  "chunk-embeddings.partial.ndjson.lock",
   "bm25.json",
   "bm25.ndjson",
   "bm25n.bin",
