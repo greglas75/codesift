@@ -61,11 +61,14 @@ describe("orphaned generation files", () => {
     expect(existsSync(published)).toBe(true);
   });
 
-  it("leaves every generation of a hash whose manifest cannot be read", async () => {
+  it.each([
+    ["does not parse", "{ torn"],
+    ["names no file", JSON.stringify({ version: 1 })],
+  ])("leaves every generation of a hash whose manifest %s", async (_case, manifest) => {
     // Fails closed: deleting a live generation costs hours of embedding, keeping an orphan costs disk.
     const published = `${target}.generation.4194304.11111111-2222-3333-4444-555555555555`;
     makeOld(published, 2 * HOUR);
-    writeFileSync(join(dir, "abc123.chunk-index.json"), "{ torn");
+    writeFileSync(join(dir, "abc123.chunk-index.json"), manifest);
     expect(await cleanupOrphanTempFiles(target)).toBe(0);
     expect(existsSync(published)).toBe(true);
   });

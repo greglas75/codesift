@@ -66,9 +66,12 @@ const holdsLock = (h: Awaited<ReturnType<typeof lockHolder>>): boolean =>
  * cross-provider review, 2026-10-12). Under the takeover lock the holder re-reads the lock, and
  * nothing else removes a lock, so what it removes is the stale one it read.
  *
- * Residual, accepted: a process that dies while holding the takeover lock — a few milliseconds of
- * file operations — leaves it to be cleared by the next taker, and two takers clearing it at once can
- * both proceed. The scratch name is a `.tmp.<pid>` tail, which prune reclaims once that pid is gone.
+ * A takeover lock is cleared only when its holder is provably gone (a dead pid, or no readable pid
+ * past the grace period), never by age: a live holder stalled for seconds on a loaded machine must
+ * not lose it. Residual, accepted: two takers clearing one DEAD holder's takeover lock at once can
+ * both proceed. That needs a process to die inside a few milliseconds of file operations while two
+ * others contend. The scratch name `fresh` is a `.tmp.<pid>` tail, which prune reclaims once that
+ * pid is gone; the takeover lock is removed by its holder.
  */
 export async function acquireLock(lockPath: string): Promise<{ held: true } | { held: false; owner: number }> {
   if (heldHere.has(lockPath)) return { held: false, owner: process.pid };
@@ -87,9 +90,6 @@ export async function acquireLock(lockPath: string): Promise<{ held: true } | { 
   return result;
 }
 
-/** How long a takeover lock is presumed live when its holder cannot be judged by pid. */
-const TAKEOVER_LOCK_STALE_MS = 10_000;
-
 /** Take `<lock>.takeover` by linking `fresh` (our pid) into place; clear a dead holder's first. */
 async function takeTakeoverLock(takeover: string, fresh: string): Promise<boolean> {
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -101,9 +101,7 @@ async function takeTakeoverLock(takeover: string, fresh: string): Promise<boolea
     }
     const holder = await lockHolder(takeover);
     if (holder === "gone") continue;
-    let age = 0;
-    try { age = Date.now() - (await stat(takeover)).mtimeMs; } catch { continue; }
-    if (holdsLock(holder) && Math.abs(age) < TAKEOVER_LOCK_STALE_MS) return false;
+    if (holdsLock(holder)) return false;
     await unlink(takeover).catch(() => undefined);
   }
   return false;

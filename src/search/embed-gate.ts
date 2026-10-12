@@ -115,7 +115,9 @@ export async function withEmbedSlot<T>(
     try {
       if (machineSlot) {
         const { releaseLock } = await import("../storage/file-lock.js");
-        await releaseLock(machineSlot).catch(() => undefined);
+        // Logged, not thrown: a slot this process cannot release is taken over once the process exits.
+        await releaseLock(machineSlot).catch((err: unknown) =>
+          console.error(`[codesift] could not release embed slot ${machineSlot}: ${err instanceof Error ? err.message : String(err)}`));
       }
     } finally {
       // Unconditionally: a release that threw must not leak this process's slot, or every later

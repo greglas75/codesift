@@ -94,6 +94,17 @@ describe("EmbeddingCheckpoint lock", () => {
     expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe(DEAD_PID);
   });
 
+  it("leaves a live process's takeover lock alone however old it is — a loaded machine stalls for seconds", async () => {
+    writeFileSync(`${partial()}.lock`, DEAD_PID);
+    writeFileSync(`${partial()}.lock.takeover`, String(process.ppid));
+    const old = new Date(Date.now() - 5 * 60_000);
+    utimesSync(`${partial()}.lock.takeover`, old, old);
+
+    expect(await EmbeddingCheckpoint.open(partial(), "m")).toEqual({ busy: 0 });
+
+    expect(readFileSync(`${partial()}.lock.takeover`, "utf-8")).toBe(String(process.ppid));
+  });
+
   it("clears a takeover lock its dead holder left behind", async () => {
     writeFileSync(`${partial()}.lock`, DEAD_PID);
     writeFileSync(`${partial()}.lock.takeover`, DEAD_PID);

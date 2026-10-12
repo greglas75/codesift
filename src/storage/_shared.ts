@@ -27,9 +27,10 @@ export function chunkGenerationGuard(dir: string): (name: string) => boolean {
     if (!entry.endsWith(suffix)) continue;
     try {
       const manifest = JSON.parse(readFileSync(join(dir, entry), "utf-8")) as { chunks?: unknown; embeddings?: unknown };
-      for (const name of [manifest.chunks, manifest.embeddings]) {
-        if (typeof name === "string" && name === basename(name)) inUse.add(name);
-      }
+      const names = [manifest.chunks, manifest.embeddings];
+      // A manifest that parses but names no usable file is as unknown as one that does not parse.
+      if (!names.every((name) => typeof name === "string" && name === basename(name))) throw new Error("malformed");
+      for (const name of names as string[]) inUse.add(name);
     } catch {
       unknownHashes.add(entry.slice(0, -suffix.length));
     }
