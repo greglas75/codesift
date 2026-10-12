@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-10-12
+
+Semantic search moves into the Rust core: vectors are stored in a binary file 5× smaller than the
+ndjson, load in about a second, and a query takes tens of milliseconds instead of ~650 ms on the
+largest repo. Worktrees stop re-embedding what a sibling already has.
+
 ### Changed
 
 - **Semantic search ranks vectors in the Rust core.** On a 463k-vector repo a query takes 19–57 ms
@@ -18,6 +24,20 @@
 
 - Semantic search no longer gives result slots to vectors of symbols deleted since the last embedding
   run, and no longer returns ids that have no file in the index.
+- **A worktree reuses the vectors of its nearest checkout that has them**, not only those of the
+  checkout its index was seeded from; a repo with no vectors of its own starts from its nearest
+  sibling's. An empty vector file or a checkpoint no longer blocks that. Before, a fresh rdesigner
+  worktree re-embedded all 463k symbols while a sibling 60 commits back held every one of them.
+- **The embedding request cap is machine-wide**, not per process: the daemon embeds each repo in its
+  own child, and eight children at once put ~30 requests in front of one local model.
+- **Chunk embedding passes reuse, checkpoint and clone** like the symbol pass. No large checkout had
+  ever finished one.
+- **`prune` no longer deletes live chunk indexes.** A published chunk generation was read as an
+  interrupted write and collected an hour after its run: 68 of 70 chunk manifests here pointed at
+  files that were gone. Nor does it delete a superseded ndjson when a vector file changed while it
+  was being verified.
+- A watcher acts only while it serves its repo name; an old watcher's delete events could remove
+  symbols from a re-rooted repo's search index.
 
 ## [0.23.0] — 2026-10-11
 
