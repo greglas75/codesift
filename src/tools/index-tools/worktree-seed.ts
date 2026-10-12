@@ -324,7 +324,8 @@ export async function seedWorktreeIndexFromParent(
     // best one to copy, and the nearest index is usually a sibling nobody has embedded — measured
     // 2026-10-12: a fresh develop worktree seeded from a sibling 0 commits back with no vectors,
     // while one 60 commits back held all 462,980. So: the index donor's vectors when it has them,
-    // otherwise those of the nearest checkout in this history that does.
+    // otherwise those of the nearest checkout in this history that does, or failing that of the
+    // most recently indexed checkout of this repository.
     let embeddings: SeedResult["embeddings"];
     if (config.embeddingProvider) {
       const { seedEmbeddingsFromDonor, hasSymbolEmbeddings, cloneVectorsFromNearestDonor } =

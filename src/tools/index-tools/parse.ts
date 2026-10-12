@@ -429,12 +429,12 @@ export async function embedChunks(
     // processes, and each finished batch is checkpointed. Without them every worktree of a large
     // repo re-embedded every chunk, and a restart threw the pass away. Best effort, like the rest.
     try {
-      const { cloneChunksFromNearestDonor } = await import("./worktree-seed-embeddings.js");
+      const { cloneChunksFromNearestDonor, donorDistanceText } = await import("./worktree-seed-embeddings.js");
       const cloned = await cloneChunksFromNearestDonor(rootPath, repoName, indexPath, provider.model);
       if (cloned.seeded) {
         console.error(
           `[codesift] ${repoName}: cloned chunk vectors from ${cloned.donor} ` +
-          `(${cloned.distance} commit(s) back) — embedding only the chunks that differ`,
+          `(${donorDistanceText(cloned.distance)}) — embedding only the chunks that differ`,
         );
       } else if (cloned.donor) {
         console.error(`[codesift] ${repoName}: not cloning chunk vectors from ${cloned.donor}: ${cloned.reason}`);

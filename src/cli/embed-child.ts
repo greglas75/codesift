@@ -54,12 +54,12 @@ async function main(): Promise<void> {
   // A repo with nothing of its own starts from the nearest sibling's vectors, so only what differs
   // is embedded. Best effort: any failure here leaves the run exactly as it was before.
   try {
-    const { cloneVectorsFromNearestDonor } = await import("../tools/index-tools/worktree-seed-embeddings.js");
+    const { cloneVectorsFromNearestDonor, donorDistanceText } = await import("../tools/index-tools/worktree-seed-embeddings.js");
     const cloned = await cloneVectorsFromNearestDonor(rootPath, repoName, indexPath);
     if (cloned.seeded) {
       process.stderr.write(
         `[codesift] ${repoName}: cloned ${cloned.vectors} vectors from ${cloned.donor} ` +
-        `(${cloned.distance} commit(s) back) — embedding only what differs\n`,
+        `(${donorDistanceText(cloned.distance)}) — embedding only what differs\n`,
       );
     } else if (cloned.donor) {
       // A donor existed and the clone failed: say why, or a full re-embed looks like "no donor".

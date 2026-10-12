@@ -282,6 +282,16 @@ export class OpenAIProvider implements EmbeddingProvider {
 // Ollama provider (local)
 // ---------------------------------------------------------------------------
 
+/** An Ollama error body that means its model runner was unreachable, not that the input was bad. */
+const OLLAMA_RUNNER_GONE = /connection reset|connection refused|dial tcp|EOF/i;
+/** Waits before re-sending a batch whose runner was gone: a runner restart takes a few seconds. */
+let OLLAMA_RUNNER_RETRY_MS: readonly number[] = [2_000, 5_000, 10_000];
+
+/** Tests cannot wait seconds per case, and fake timers stall on the gate's real file I/O. */
+export function setOllamaRunnerRetryDelaysForTesting(delays: readonly number[] | null): void {
+  OLLAMA_RUNNER_RETRY_MS = delays ?? [2_000, 5_000, 10_000];
+}
+
 export class OllamaProvider implements EmbeddingProvider {
   readonly model: string;
   readonly dimensions: number;
@@ -316,18 +326,27 @@ export class OllamaProvider implements EmbeddingProvider {
     // Silicon. /api/embed embeds the whole array in one request.
     // Through the gate: the remote serves a fixed number at a time, and firing more than that at it
     // turns queueing into timeouts, and timeouts into retries that queue again. See embed-gate.ts.
-    const response = await withEmbedSlot(() => fetch(`${this.baseUrl}/api/embed`, {
+    const send = () => withEmbedSlot(() => fetch(`${this.baseUrl}/api/embed`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: this.model, input: capped }),
       signal: AbortSignal.timeout(embeddingTimeoutMs(capped)),
     }));
 
-    if (!response.ok) {
+    let response = await send();
+    for (let attempt = 0; !response.ok; attempt++) {
       // SEC-004: log raw body to stderr only — do not forward to the MCP client.
       const body = await response.text();
       console.error(`Ollama API error ${response.status}:`, body);
-      throw new Error(`Ollama API error: ${response.status}`);
+      // Ollama answers 400 when its model runner died under the request ("dial tcp …/tokenize:
+      // connection reset by peer"). That says nothing about the input: the runner restarts within
+      // seconds and the same batch then embeds. Treated as fatal, it ended whole runs — measured
+      // 2026-10-12, both 400s in the daemon log were this, each stopping a 450k-symbol pass.
+      if (attempt >= OLLAMA_RUNNER_RETRY_MS.length || !OLLAMA_RUNNER_GONE.test(body)) {
+        throw new Error(`Ollama API error: ${response.status}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, OLLAMA_RUNNER_RETRY_MS[attempt]));
+      response = await send();
     }
 
     const data: unknown = await response.json();

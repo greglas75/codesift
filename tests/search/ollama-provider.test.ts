@@ -1,4 +1,6 @@
-import { createEmbeddingProvider, expectedEmbeddingModel } from "../../src/search/semantic.js";
+import {
+  createEmbeddingProvider, expectedEmbeddingModel, setOllamaRunnerRetryDelaysForTesting,
+} from "../../src/search/semantic.js";
 
 /**
  * The Ollama provider used to be pinned to nomic-embed-text / 768d and embedded
@@ -69,6 +71,29 @@ describe("OllamaProvider — configurable model + batch endpoint", () => {
     // batch. Cap it before it ever reaches Ollama.
     expect(sentInput[0]!.length).toBeLessThanOrEqual(8192);
     expect(sentInput[1]).toBe("short"); // normal text untouched
+  });
+
+  // Bug: a 400 from a model runner that died mid-request ended a 450k-symbol embedding run.
+  it.each([
+    ["re-sends the batch once a crashed model runner is back", "connection reset by peer", 2, true],
+    ["fails at once when Ollama rejects the input itself", "invalid input type", 1, false],
+  ])("%s", async (_name, body, expectedCalls, succeeds) => {
+    setOllamaRunnerRetryDelaysForTesting([1, 1, 1]);
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        return { ok: false, status: 400, text: async () => `{"error":"Post \\"http://127.0.0.1:1/tokenize\\": ${body}"}` };
+      }
+      return { ok: true, json: async () => ({ embeddings: [[0.1]] }) };
+    }) as unknown as typeof fetch;
+    const p = createEmbeddingProvider("ollama", { ollamaUrl: "http://localhost:11434", ollamaModel: "embeddinggemma" });
+
+    const succeeded = await p.embed(["a"], "document").then(() => true, () => false);
+    setOllamaRunnerRetryDelaysForTesting(null);
+
+    expect(succeeded).toBe(succeeds);
+    expect(calls).toBe(expectedCalls);
   });
 
   it("expectedEmbeddingModel reflects the configured Ollama model (for cache invalidation)", () => {

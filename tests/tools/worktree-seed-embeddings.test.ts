@@ -175,10 +175,10 @@ describe("cloneVectorsFromNearestDonor", () => {
     resetConfigCache();
   });
 
-  function register(commit: string): void {
+  function register(commit: string, name = DONOR): void {
     writeFileSync(join(dir, "registry.json"), JSON.stringify({
       updated_at: 1,
-      repos: { [DONOR]: { name: DONOR, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: commit } },
+      repos: { [name]: { name, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: commit } },
     }));
   }
 
@@ -261,12 +261,28 @@ describe("cloneVectorsFromNearestDonor", () => {
     expect([...reused.hashes]).toEqual([[`${TARGET}:a.ts:1`, 5]]);
   });
 
-  it("ignores a checkout whose commit is not in this tree's history", async () => {
-    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0] }]);
+  // Bug: only donors in this branch's history counted, so whole branches of worktrees embedded
+  // 447k symbols from scratch beside siblings holding them. Reuse is by content hash, so any
+  // checkout of the same repository is safe; it is only the fallback.
+  it("falls back to a checkout of the same repository outside this history", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
     register("f".repeat(40));
 
     const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
 
-    expect(result).toEqual({ seeded: false, reason: "no indexed checkout in this history has vectors" });
+    if (!result.seeded) {
+      expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
+      return;
+    }
+    expect(result).toMatchObject({ donor: DONOR, distance: null, vectors: 1 });
+  });
+
+  it("never takes vectors from another repository", async () => {
+    writeDonor([{ id: "local/other:a.ts:a:1", vec: [1, 0] }]);
+    register("f".repeat(40), "local/other");
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors" });
   });
 });

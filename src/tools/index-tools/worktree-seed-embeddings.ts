@@ -170,40 +170,60 @@ export async function cloneVectorsFromNearestDonor(
   rootPath: string,
   repoName: string,
   indexPath: string,
-): Promise<EmbeddingSeedResult & { donor?: string; distance?: number }> {
+): Promise<EmbeddingSeedResult & { donor?: string; distance?: number | null }> {
   if (await hasSymbolEmbeddings(indexPath)) return { seeded: false, reason: "has vectors of its own" };
   const best = await nearestDonor(rootPath, repoName, hasSymbolEmbeddings);
-  if (best === null) return { seeded: false, reason: "no git history to place a donor in" };
-  if (!best) return { seeded: false, reason: "no indexed checkout in this history has vectors" };
+  if (!best) return { seeded: false, reason: "no indexed checkout of this repository has vectors" };
 
   const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);
   return { ...result, donor: best.name, distance: best.distance };
 }
 
 /**
- * The registered checkout nearest in this tree's history for which `has(index_path)` holds.
- * `null` when the tree has no history to place one in, `undefined` when none qualifies.
+ * The registered checkout nearest in this tree's history for which `has(index_path)` holds; failing
+ * that, the most recently indexed checkout of the same repository (`distance: null`).
+ *
+ * The fallback exists because vectors are reused by CONTENT: a run keeps a cloned vector only where
+ * its symbol's id and text hash match, so a donor from another branch is never wrong, only less
+ * useful. History alone missed whole families of worktrees — measured 2026-10-12, the
+ * `tsp-wt-import-*` worktrees had no vector donor in their history and embedded 447k symbols from
+ * scratch while dozens of sibling checkouts held them.
  */
 async function nearestDonor(
   rootPath: string,
   repoName: string,
   has: (indexPath: string) => Promise<boolean>,
-): Promise<{ name: string; index_path: string; distance: number } | null | undefined> {
+): Promise<{ name: string; index_path: string; distance: number | null } | undefined> {
   const { headHistory } = await import("./worktree-seed.js");
   const { listRepos } = await import("../../storage/registry.js");
   const { loadConfig } = await import("../../config.js");
-  const history = await headHistory(rootPath);
-  if (history.size === 0) return null;
+  const history = await headHistory(rootPath).catch(() => new Map<string, number>());
+  const candidates = (await listRepos(loadConfig().registryPath).catch(() => [])).filter((c) => c.name !== repoName);
 
   let best: { name: string; index_path: string; distance: number } | undefined;
-  for (const candidate of await listRepos(loadConfig().registryPath).catch(() => [])) {
-    if (candidate.name === repoName || !candidate.last_git_commit) continue;
+  for (const candidate of candidates) {
+    if (!candidate.last_git_commit) continue;
     const distance = history.get(candidate.last_git_commit);
     if (distance === undefined || (best && distance >= best.distance)) continue;
     if (!(await has(candidate.index_path))) continue;
     best = { name: candidate.name, index_path: candidate.index_path, distance };
   }
-  return best;
+  if (best) return best;
+
+  // Same repository: the registry name before a worktree's `@` suffix.
+  const family = (name: string) => name.split("@")[0];
+  const siblings = candidates
+    .filter((c) => family(c.name) === family(repoName))
+    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  for (const sibling of siblings) {
+    if (await has(sibling.index_path)) return { name: sibling.name, index_path: sibling.index_path, distance: null };
+  }
+  return undefined;
+}
+
+/** How far back a donor is, for a log line. */
+export function donorDistanceText(distance: number | null | undefined): string {
+  return distance === null || distance === undefined ? "not in this branch's history" : `${distance} commit(s) back`;
 }
 
 /**
@@ -235,11 +255,10 @@ export async function cloneChunksFromNearestDonor(
   repoName: string,
   indexPath: string,
   model: string,
-): Promise<EmbeddingSeedResult & { donor?: string; distance?: number }> {
+): Promise<EmbeddingSeedResult & { donor?: string; distance?: number | null }> {
   if (await reusableChunkManifest(indexPath, model)) return { seeded: false, reason: "has chunk vectors of its own" };
   const best = await nearestDonor(rootPath, repoName, async (p) => (await reusableChunkManifest(p, model)) !== null);
-  if (best === null) return { seeded: false, reason: "no git history to place a donor in" };
-  if (!best) return { seeded: false, reason: "no indexed checkout in this history has chunk vectors" };
+  if (!best) return { seeded: false, reason: "no indexed checkout of this repository has chunk vectors" };
   const donor = await reusableChunkManifest(best.index_path, model);
   if (!donor) return { seeded: false, reason: "donor chunk vectors vanished", donor: best.name, distance: best.distance };
 
