@@ -83,7 +83,7 @@ export function contentHashesForPath(embeddingPath: string): Map<string, number>
  * Read from the meta file because that is where the seed records it — the vector file itself is a
  * byte-identical clone of the donor's and cannot say whose ids it carries.
  */
-function idRebaseFor(embeddingPath: string, readText: (path: string) => string): { from: string; to: string } | null {
+export function idRebaseFor(embeddingPath: string, readText: (path: string) => string): { from: string; to: string } | null {
   if (!embeddingPath.endsWith(".embeddings.ndjson")) return null;
   try {
     const meta = JSON.parse(readText(embeddingPath.replace(/\.embeddings\.ndjson$/, ".embeddings.meta.json"))) as {

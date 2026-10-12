@@ -3,6 +3,7 @@ import { bm25CacheBudgetBytes, bm25FootprintBytes, type BM25Index } from "../../
 import type { CodeIndex } from "../../types.js";
 import { indexFootprintBytes } from "../../storage/index-footprint.js";
 import { indexCacheMemBudgetBytes } from "../../config.js";
+import { markNativeVectorFilesStale, releaseNativeVectors } from "../../search/native-vectors.js";
 
 export const activeWatchers = new Map<string, FSWatcher>();
 export const bm25Indexes = new Map<string, BM25Index>();
@@ -150,6 +151,9 @@ export function invalidateEmbeddingCaches(repoName: string): void {
   // the caches were cleared. One mechanism, called twice.
   invalidateEmbeddingCache(repoName);
   invalidateEmbeddingCache(chunkCacheKey(repoName));
+  // The native set's vectors come from a file no index edit rewrites; which ids exist, and where,
+  // is what changed.
+  markNativeVectorFilesStale(repoName);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +215,7 @@ export function releaseCachedIndexes(): { indexes: number; bm25: number; embeddi
   for (const key of embeddingCaches.keys()) invalidateEmbeddingCache(key);
   embeddingCaches.clear();
   embeddingCacheSources.clear();
+  releaseNativeVectors();
   return released;
 }
 

@@ -121,6 +121,13 @@ describe("searchSemantic", () => {
     expect(results.every((r) => r.symbol.id !== "orphan-id")).toBe(true);
   });
 
+  it("a stale vector of a deleted symbol does not take a result slot", () => {
+    // The orphan matches the query best; cut to top 1 before dropping it, the answer was empty.
+    const withOrphan = new Map([["orphan-id", makeEmbedding(3, [1, 0, 0])], ...embeddings]);
+    const results = searchSemantic(queryVec, withOrphan, symbolMap, 1);
+    expect(results.map((r) => r.symbol.id)).toEqual(["sym1"]);
+  });
+
   it("scores are in [0, 1] range for normalized vectors", () => {
     // Normalized vectors → cosine similarity in [-1, 1]
     const results = searchSemantic(queryVec, embeddings, symbolMap, 3);

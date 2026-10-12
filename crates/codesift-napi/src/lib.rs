@@ -1106,3 +1106,168 @@ pub fn build_call_graph(
         filter_react_hooks,
     })
 }
+
+// ---------------------------------------------------------------------------
+// Embedding vectors (stage 11)
+// ---------------------------------------------------------------------------
+
+use codesift_core::vectors;
+
+fn vectors_poisoned() -> napi::Error {
+    napi::Error::new(Status::GenericFailure, "vectors lock poisoned")
+}
+
+/// A repo's embedding vectors in Rust memory (`loadVectors`).
+#[napi]
+pub struct NativeVectors {
+    inner: Arc<RwLock<vectors::Vectors>>,
+}
+
+#[napi(object)]
+pub struct VectorHitJs {
+    pub id: String,
+    pub score: f64,
+}
+
+pub struct SearchVectorsTask {
+    inner: Arc<RwLock<vectors::Vectors>>,
+    query: Vec<f32>,
+    top_k: usize,
+    contains: Option<String>,
+    exclude_tests: bool,
+}
+
+impl Task for SearchVectorsTask {
+    type Output = Vec<vectors::Hit>;
+    type JsValue = Vec<VectorHitJs>;
+
+    fn compute(&mut self) -> napi::Result<Vec<vectors::Hit>> {
+        let v = self.inner.read().map_err(|_| vectors_poisoned())?;
+        v.search(
+            &self.query,
+            self.top_k,
+            self.contains.as_deref(),
+            self.exclude_tests,
+        )
+        .map_err(|e| napi::Error::new(Status::InvalidArg, e))
+    }
+
+    fn resolve(&mut self, _env: Env, hits: Vec<vectors::Hit>) -> napi::Result<Vec<VectorHitJs>> {
+        Ok(hits
+            .into_iter()
+            .map(|h| VectorHitJs {
+                id: h.id,
+                score: h.score,
+            })
+            .collect())
+    }
+}
+
+#[napi]
+impl NativeVectors {
+    #[napi(getter)]
+    pub fn count(&self) -> napi::Result<u32> {
+        Ok(self.inner.read().map_err(|_| vectors_poisoned())?.len() as u32)
+    }
+
+    #[napi(getter)]
+    pub fn dims(&self) -> napi::Result<u32> {
+        Ok(self.inner.read().map_err(|_| vectors_poisoned())?.dims() as u32)
+    }
+
+    /// Lines skipped on load: `[other width, malformed]`.
+    #[napi]
+    pub fn skipped(&self) -> napi::Result<Vec<u32>> {
+        let v = self.inner.read().map_err(|_| vectors_poisoned())?;
+        Ok(vec![v.skipped_width() as u32, v.skipped_malformed() as u32])
+    }
+
+    #[napi]
+    pub fn footprint_bytes(&self) -> napi::Result<f64> {
+        Ok(self
+            .inner
+            .read()
+            .map_err(|_| vectors_poisoned())?
+            .footprint_bytes() as f64)
+    }
+
+    /// The file of every symbol in the index, as two parallel arrays; replaces the previous set.
+    #[napi]
+    pub fn attach_files(&self, ids: Vec<String>, files: Vec<String>) -> napi::Result<()> {
+        if ids.len() != files.len() {
+            return Err(napi::Error::new(
+                Status::InvalidArg,
+                "ids and files differ in length",
+            ));
+        }
+        self.inner
+            .write()
+            .map_err(|_| vectors_poisoned())?
+            .attach_files(&ids, &files);
+        Ok(())
+    }
+
+    /// Top `topK` vectors by cosine to `query`, among attached files passing the filter, scored off
+    /// the main thread.
+    #[napi]
+    pub fn search_async(
+        &self,
+        query: napi::bindgen_prelude::Float32Array,
+        top_k: u32,
+        contains: Option<String>,
+        exclude_tests: bool,
+    ) -> AsyncTask<SearchVectorsTask> {
+        AsyncTask::new(SearchVectorsTask {
+            inner: Arc::clone(&self.inner),
+            query: query.to_vec(),
+            top_k: top_k as usize,
+            contains,
+            exclude_tests,
+        })
+    }
+
+    /// Free the vectors' Rust memory now (V8 cannot see it). The handle answers as empty afterwards.
+    #[napi]
+    pub fn release(&self) -> napi::Result<()> {
+        *self.inner.write().map_err(|_| vectors_poisoned())? = vectors::Vectors::default();
+        Ok(())
+    }
+}
+
+pub struct LoadVectorsTask {
+    path: PathBuf,
+    rebase: Option<vectors::Rebase>,
+}
+
+impl Task for LoadVectorsTask {
+    type Output = vectors::Vectors;
+    type JsValue = NativeVectors;
+
+    fn compute(&mut self) -> napi::Result<vectors::Vectors> {
+        vectors::Vectors::load_ndjson(&self.path, self.rebase.as_ref())
+            .map_err(|e| napi::Error::new(Status::GenericFailure, format!("vectors load: {e}")))
+    }
+
+    fn resolve(&mut self, _env: Env, v: vectors::Vectors) -> napi::Result<NativeVectors> {
+        Ok(NativeVectors {
+            inner: Arc::new(RwLock::new(v)),
+        })
+    }
+}
+
+/// An embeddings ndjson file, parsed off the main thread; `rebaseFrom`/`rebaseTo` rewrite an id prefix
+/// (a worktree's clone of its donor's file).
+#[napi]
+pub fn load_vectors(
+    path: String,
+    rebase_from: Option<String>,
+    rebase_to: Option<String>,
+) -> AsyncTask<LoadVectorsTask> {
+    AsyncTask::new(LoadVectorsTask {
+        path: PathBuf::from(path),
+        rebase: match (rebase_from, rebase_to) {
+            (Some(from), Some(to)) => Some(vectors::Rebase { from, to }),
+            _ => None,
+        },
+    })
+}

@@ -156,6 +156,10 @@ export function searchSemantic(
 
   for (const [id, vec] of embeddings) {
     if (vec.length !== queryEmbedding.length) continue;
+    // Before the cut, not after: the vector file outlives deleted symbols until the next embedding
+    // run, and a stale vector that scored high took a result slot and was then dropped, returning
+    // fewer than topK results.
+    if (!symbols.has(id)) continue;
     const score = cosineSimilarity(queryEmbedding, vec);
     scored.push({ id, score });
   }

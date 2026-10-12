@@ -87,6 +87,18 @@ export function callGraphCacheBudgetBytes(): number {
   return scaledCacheBudgetMb(32, 8192) * 1024 * 1024;
 }
 
+/**
+ * Resident budget for native vector sets (ADR-006 stage 11): vectors in Rust memory, which V8 cannot
+ * see. Sized like the call graph rather than the embedding cache: one rdesigner worktree is 463k ×
+ * 768 floats = 1.42 GB, more than the embedding budget lets the TypeScript fallback hold.
+ */
+export function vectorCacheBudgetBytes(): number {
+  const raw = process.env["CODESIFT_MAX_VECTOR_CACHE_MB"];
+  const n = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isNaN(n) && n > 0) return n * 1024 * 1024;
+  return scaledCacheBudgetMb(32, 8192) * 1024 * 1024;
+}
+
 export function embeddingMemBudgetBytes(): number {
   const raw = process.env["CODESIFT_MAX_EMBEDDING_MEM_MB"];
   const n = raw ? parseInt(raw, 10) : NaN;

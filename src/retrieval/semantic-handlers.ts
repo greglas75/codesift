@@ -100,6 +100,48 @@ async function loadSemanticContext(
   };
 }
 
+/**
+ * The symbol-level ranking through the native vector set, or null when it cannot answer (no core, no
+ * vector file, vectors of another model, a failed load) — null means the TypeScript path below.
+ */
+async function nativeSymbolSearch(
+  repo: string,
+  ctx: SemanticContext,
+  query: Float32Array,
+): Promise<{ hits: Array<{ id: string; score: number }>; dims: number } | null> {
+  if (!ctx.repoMeta) return null;
+  const { localEmbeddingsDisabled } = await import("../config.js");
+  if (localEmbeddingsDisabled()) return null;
+  const { getEmbeddingPath, getEmbeddingMetaPath, loadEmbeddingMeta, idRebaseFor } =
+    await import("../storage/embedding-store.js");
+  const { expectedEmbeddingModel } = await import("../search/semantic.js");
+  const indexPath = ctx.repoMeta.index_path;
+  // Vectors of another model are incomparable: the TypeScript path refuses them with the message that
+  // says so, so leave it to that path.
+  const meta = await loadEmbeddingMeta(getEmbeddingMetaPath(indexPath));
+  if (meta && ctx.config.embeddingProvider) {
+    const want = expectedEmbeddingModel(ctx.config.embeddingProvider, ctx.config.localModel, ctx.config.ollamaModel);
+    if (meta.model !== want) return null;
+  }
+  const vectorPath = getEmbeddingPath(indexPath);
+  const { readFileSync } = await import("node:fs");
+  const { searchNativeVectors } = await import("../search/native-vectors.js");
+  const { findRepoSymbols } = await import("../tools/index-tools.js");
+  return searchNativeVectors({
+    repo,
+    vectorPath,
+    rebase: idRebaseFor(vectorPath, (p) => readFileSync(p, "utf-8")),
+    listFiles: async () => {
+      const symbols = await findRepoSymbols(repo, { withSource: false }, { skipFreshness: true });
+      return { ids: symbols.map((s) => s.id), files: symbols.map((s) => s.file) };
+    },
+    query,
+    topK: ctx.topK,
+    contains: ctx.fileFilter,
+    excludeTests: ctx.excludeTests,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Semantic query handler
 // ---------------------------------------------------------------------------
@@ -139,6 +181,31 @@ export async function handleSemanticQuery(
   // Fall back to symbol-level semantic search
   const { findRepoSymbols, getEmbeddingCache, getIndexSummary } = await import("../tools/index-tools.js");
   const { searchSemantic } = await import("../search/semantic.js");
+  const sourceLimit = query.source_chars ?? DEFAULT_SOURCE_CHARS;
+
+  const primaryVec = ctx.vecs[0];
+  if (!primaryVec) throw new Error("Embedding provider returned no vector");
+
+  // The vectors in Rust memory when the core is there: same ranking, bit for bit, without parsing the
+  // vector file on this thread or holding it in the V8 heap (search/native-vectors.ts).
+  const native = await nativeSymbolSearch(repo, ctx, new Float32Array(primaryVec));
+  if (native) {
+    if (native.dims !== primaryVec.length) {
+      const text = dimensionMismatchMessage(primaryVec.length, native.dims);
+      return { type: "semantic", data: text, tokens: estimateTokens(text) };
+    }
+    const ids = native.hits.map((h) => h.id);
+    const byId = new Map(
+      (ids.length > 0 ? await findRepoSymbols(repo, { ids, withSource: true }, { skipFreshness: true }) : [])
+        .map((s) => [s.id, s]),
+    );
+    const found = ids.flatMap((id) => {
+      const symbol = byId.get(id);
+      return symbol ? [{ symbol: truncateSymbolSource(symbol, sourceLimit) }] : [];
+    });
+    const text = formatSemanticResults(found);
+    return { type: "semantic", data: text, tokens: estimateTokens(text) };
+  }
 
   // Every symbol's id and file (no source) for the filter and the ranking; source is read only for
   // the few results shown (ADR-004 stage 2 — this loaded the whole index).
@@ -155,13 +222,9 @@ export async function handleSemanticQuery(
     );
   }
 
-  const sourceLimit = query.source_chars ?? DEFAULT_SOURCE_CHARS;
   const symbolMap = new Map(index.symbols.map((s) => [s.id, s]));
   const symFileLookup = new Map([...symbolMap.entries()].map(([id, s]) => [id, s.file]));
   const filteredEmbeddings = filterEmbeddingsByFile(embeddings, symFileLookup, ctx.fileFilter, ctx.excludeTests);
-
-  const primaryVec = ctx.vecs[0];
-  if (!primaryVec) throw new Error("Embedding provider returned no vector");
 
   const symbolMismatch = detectDimensionMismatch(primaryVec.length, filteredEmbeddings);
   if (symbolMismatch) {

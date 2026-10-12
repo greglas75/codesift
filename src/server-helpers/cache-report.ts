@@ -55,6 +55,10 @@ export async function readCacheReport(): Promise<CacheReport> {
     report["native_call_graph"] = graph.nativeGraphCacheStats();
   } catch { /* ditto */ }
   try {
+    const vectors = await import("../search/native-vectors.js");
+    report["native_vectors"] = vectors.nativeVectorCacheStats();
+  } catch { /* ditto */ }
+  try {
     const gate = await import("../tools/index-tools/load-gate.js");
     const { active, waiting } = gate.indexLoadGateState();
     report["index_load_gate"] = { entries: active + waiting };

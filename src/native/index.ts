@@ -9,7 +9,7 @@
  * Switches, modelled on `CODESIFT_INDEX_BACKEND`:
  *   CODESIFT_NATIVE              auto (default) | 0 | 1
  *   CODESIFT_NATIVE_<COMPONENT>  same values, overrides the global one for that component
- *                                (STORE, BM25, PARSER — added with the stage that uses each)
+ *                                (STORE, BM25, PARSER, VECTORS — added with the stage that uses each)
  * `1` means REQUIRED: the parity suites run with it, and a binary that fails to load there must
  * fail the run rather than quietly test the TypeScript path twice.
  */
@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 22;
+export const NATIVE_ABI = 23;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -170,6 +170,28 @@ export interface NativeCallGraphHandle {
   symbolsJson(positions: Uint32Array, withSource: boolean): Promise<string[]>;
 }
 
+export interface NativeVectorHit {
+  id: string;
+  score: number;
+}
+
+/** A repo's embedding vectors in Rust memory (stage 11, `loadVectors`). */
+export interface NativeVectorsHandle {
+  readonly count: number;
+  readonly dims: number;
+  /** Lines skipped on load: `[other width, malformed]`. */
+  skipped(): number[];
+  footprintBytes(): number;
+  /** The file of every symbol in the index (parallel arrays); replaces the previous set. Ids not
+   *  listed — symbols deleted since the embedding run — stop being candidates. */
+  attachFiles(ids: string[], files: string[]): void;
+  /** `searchSemantic` over attached files passing the filter (`file` contains `contains`; not a test
+   *  file when `excludeTests`), off the main thread. Rejects before `attachFiles`. */
+  searchAsync(query: Float32Array, topK: number, contains: string | null, excludeTests: boolean): Promise<NativeVectorHit[]>;
+  /** Free the Rust memory now; the handle answers as empty afterwards. */
+  release(): void;
+}
+
 export interface NativeCore {
   version(): string;
   abiVersion(): number;
@@ -192,6 +214,9 @@ export interface NativeCore {
    *  thread (stage 4): a JSON array with one entry per source — its `TsImportEdge[]`, or `null` where
    *  the parse failed. */
   extractTsImports(sources: string[], tsx: boolean[], timeoutMs: number): Promise<string>;
+  /** An embeddings ndjson file parsed off the main thread; `rebaseFrom`/`rebaseTo` rewrite an id
+   *  prefix (`EmbeddingMeta.id_rebase`). Rejects a missing or unreadable file. */
+  loadVectors(path: string, rebaseFrom: string | null, rebaseTo: string | null): Promise<NativeVectorsHandle>;
 }
 
 export type NativeMode = "auto" | "off" | "required";
