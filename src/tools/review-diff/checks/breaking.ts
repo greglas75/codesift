@@ -8,7 +8,19 @@ const EXPORT_NAMED_RE =
 const EXPORT_DEFAULT_RE = /export\s+default/g;
 const SHOW_MAX_BUFFER = 64 * 1024 * 1024;
 
-/** git's own wording for `<ref>:<path>` naming a path the ref does not have. */
+/** A failure reading the CURRENT index, which ends the check rather than skipping one file. */
+class StoreFault extends Error {
+  constructor(override readonly cause: unknown) {
+    super("index read failed");
+  }
+}
+
+function firstLine(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.split("\n").find((l) => l.startsWith("fatal:") || l.includes("ENOBUFS") || l.includes("ETIMEDOUT")) ?? text.split("\n")[0]!;
+}
+
+/** git's own wording (under LC_ALL=C) for `<ref>:<path>` naming a path the ref does not have. */
 function isPathAbsentAtRef(err: unknown): boolean {
   const e = err as { message?: unknown; stderr?: unknown };
   const text = `${String(e?.message ?? "")}\n${String(e?.stderr ?? "")}`;
@@ -37,18 +49,27 @@ export async function checkBreakingChanges(
     const renamedFiles = detectRenamedFiles(repoRoot, since, until);
     const filesToCompare = changedFiles.filter((f) => isComparableSourceFile(f, renamedFiles));
     const findings: ReviewFinding[] = [];
+    // A file git could not read is reported, not taken as "unchanged" — and it does not discard
+    // what the other files found.
+    const unread: string[] = [];
     for (const file of filesToCompare) {
-      findings.push(...await findRemovedExports(index, repoRoot, file, since));
+      try {
+        findings.push(...await findRemovedExports(index, repoRoot, file, since));
+      } catch (err) {
+        if (err instanceof StoreFault) throw err.cause;
+        unread.push(`${file} (${firstLine(err)})`);
+      }
     }
+    const unreadNote = unread.length > 0 ? `; could not read at ${since}: ${unread.join(", ")}` : "";
 
     return {
       check: "breaking",
-      status: findings.length > 0 ? "fail" : "pass",
+      status: findings.length > 0 ? "fail" : unread.length > 0 ? "error" : "pass",
       findings,
       duration_ms: Date.now() - start,
-      summary: findings.length > 0
+      summary: (findings.length > 0
         ? `${findings.length} removed export(s) detected`
-        : "No breaking changes detected",
+        : unread.length > 0 ? "Breaking changes not checked for every file" : "No breaking changes detected") + unreadNote,
     };
   } catch (err: unknown) {
     return {
@@ -107,8 +128,12 @@ async function findRemovedExports(
       "git",
       ["show", `${since}:${file}`],
       // Node's default maxBuffer is 1 MB: a larger old file threw ENOBUFS, which the catch below
-      // read as "new file" — so exports removed from big files were never reported.
-      { cwd: repoRoot, encoding: "utf-8", timeout: 10_000, maxBuffer: SHOW_MAX_BUFFER },
+      // read as "new file" — so exports removed from big files were never reported. LC_ALL=C:
+      // git translates its messages, and the absent-path test below reads git's English.
+      {
+        cwd: repoRoot, encoding: "utf-8", timeout: 10_000, maxBuffer: SHOW_MAX_BUFFER,
+        env: { ...process.env, LC_ALL: "C" },
+      },
     );
   } catch (err) {
     // Only a path that did not exist at `since` is a new file. Anything else (overflow, timeout,
@@ -119,8 +144,15 @@ async function findRemovedExports(
 
   const oldExports = extractExportNames(oldSource);
   if (oldExports.size === 0) return [];
-  // Outside the try: a store fault must fail the check, not read as "the file is new".
-  return removedExportFindings(file, oldExports, await currentExports(index, file));
+  // Outside the try: a store fault must fail the whole check, not read as "the file is new" nor as
+  // one unreadable file.
+  let current: Set<string>;
+  try {
+    current = await currentExports(index, file);
+  } catch (err) {
+    throw new StoreFault(err);
+  }
+  return removedExportFindings(file, oldExports, current);
 }
 
 function extractExportNames(source: string): Set<string> {
