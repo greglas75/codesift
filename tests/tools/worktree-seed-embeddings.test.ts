@@ -186,7 +186,7 @@ describe("cloneVectorsFromNearestDonor", () => {
     writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
     register(git(["rev-parse", "HEAD"]));
 
-    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
     if (!result.seeded) {
       expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
@@ -204,7 +204,7 @@ describe("cloneVectorsFromNearestDonor", () => {
       model: "embeddinggemma", provider: "ollama", dimensions: 2, symbol_count: 1, updated_at: 1,
     }));
 
-    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
     expect(result).toEqual({ seeded: false, reason: "has vectors of its own" });
     expect(readFileSync(vectorsOf(targetIndex()), "utf-8")).toContain(`${TARGET}:a.ts`);
@@ -222,7 +222,7 @@ describe("cloneVectorsFromNearestDonor", () => {
     const partial = join(dir, "target.embeddings.partial.ndjson");
     writeFileSync(partial, JSON.stringify({ model: "embeddinggemma" }) + "\n");
 
-    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
     if (!result.seeded) {
       expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
@@ -268,7 +268,7 @@ describe("cloneVectorsFromNearestDonor", () => {
     writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
     register("f".repeat(40));
 
-    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
     if (!result.seeded) {
       expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
@@ -277,11 +277,22 @@ describe("cloneVectorsFromNearestDonor", () => {
     expect(result).toMatchObject({ donor: DONOR, distance: null, vectors: 1 });
   });
 
+  // Bug: the symbol clone took any donor with vectors; another model's vectors were cloned, then
+  // refused by the run's model check and re-embedded in full, after replacing nothing useful.
+  it("takes no donor whose vectors another model produced", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0] }], { model: "nomic-embed-text" });
+    register(git(["rev-parse", "HEAD"]));
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors" });
+  });
+
   it("never takes vectors from another repository", async () => {
     writeDonor([{ id: "local/other:a.ts:a:1", vec: [1, 0] }]);
     register("f".repeat(40), "local/other");
 
-    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
     expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors" });
   });

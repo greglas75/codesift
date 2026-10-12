@@ -170,9 +170,15 @@ export async function cloneVectorsFromNearestDonor(
   rootPath: string,
   repoName: string,
   indexPath: string,
+  /** Only a donor embedded by this model: another model's vectors are incomparable and get re-embedded. */
+  model: string,
 ): Promise<EmbeddingSeedResult & { donor?: string; distance?: number | null }> {
   if (await hasSymbolEmbeddings(indexPath)) return { seeded: false, reason: "has vectors of its own" };
-  const best = await nearestDonor(rootPath, repoName, hasSymbolEmbeddings);
+  const best = await nearestDonor(
+    rootPath,
+    repoName,
+    async (p) => (await hasSymbolEmbeddings(p)) && (await loadEmbeddingMeta(getEmbeddingMetaPath(p)))?.model === model,
+  );
   if (!best) return { seeded: false, reason: "no indexed checkout of this repository has vectors" };
 
   const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);

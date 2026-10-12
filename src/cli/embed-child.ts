@@ -55,7 +55,9 @@ async function main(): Promise<void> {
   // is embedded. Best effort: any failure here leaves the run exactly as it was before.
   try {
     const { cloneVectorsFromNearestDonor, donorDistanceText } = await import("../tools/index-tools/worktree-seed-embeddings.js");
-    const cloned = await cloneVectorsFromNearestDonor(rootPath, repoName, indexPath);
+    const { expectedEmbeddingModel } = await import("../search/semantic.js");
+    const model = expectedEmbeddingModel(config.embeddingProvider, config.localModel, config.ollamaModel);
+    const cloned = await cloneVectorsFromNearestDonor(rootPath, repoName, indexPath, model);
     if (cloned.seeded) {
       process.stderr.write(
         `[codesift] ${repoName}: cloned ${cloned.vectors} vectors from ${cloned.donor} ` +

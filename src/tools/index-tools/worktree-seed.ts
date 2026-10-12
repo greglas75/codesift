@@ -332,7 +332,12 @@ export async function seedWorktreeIndexFromParent(
         await import("./worktree-seed-embeddings.js");
       const vectors = (await hasSymbolEmbeddings(donor.index_path))
         ? await seedEmbeddingsFromDonor(donor.index_path, donor.name, worktreeIndexPath, worktreeName)
-        : await cloneVectorsFromNearestDonor(worktreeRoot, worktreeName, worktreeIndexPath);
+        : await cloneVectorsFromNearestDonor(
+          worktreeRoot, worktreeName, worktreeIndexPath,
+          (await import("../../search/semantic.js")).expectedEmbeddingModel(
+            config.embeddingProvider, config.localModel, config.ollamaModel,
+          ),
+        );
       embeddings = vectors.seeded ? { vectors: vectors.vectors ?? 0 } : { skipped: vectors.reason ?? "unknown" };
     }
 

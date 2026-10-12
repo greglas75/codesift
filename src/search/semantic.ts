@@ -283,7 +283,9 @@ export class OpenAIProvider implements EmbeddingProvider {
 // ---------------------------------------------------------------------------
 
 /** An Ollama error body that means its model runner was unreachable, not that the input was bad. */
-const OLLAMA_RUNNER_GONE = /connection reset|connection refused|dial tcp|EOF/i;
+// Not a bare "EOF": "/tokenize: EOF" is also what a pathologically large input produced, which is
+// deterministic and must fail rather than be re-sent.
+const OLLAMA_RUNNER_GONE = /connection reset|connection refused|dial tcp/i;
 /** Waits before re-sending a batch whose runner was gone: a runner restart takes a few seconds. */
 let OLLAMA_RUNNER_RETRY_MS: readonly number[] = [2_000, 5_000, 10_000];
 

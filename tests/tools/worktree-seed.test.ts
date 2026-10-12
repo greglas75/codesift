@@ -314,7 +314,10 @@ describe("seedWorktreeIndexFromParent", () => {
     // Measured 2026-10-12: a fresh develop worktree seeded its index from a sibling 0 commits back
     // with no vectors, while one 60 commits back held all 462,980 — and got no vectors at all.
     const prevProvider = process.env["CODESIFT_EMBEDDING_PROVIDER"];
+    const prevModel = process.env["CODESIFT_OLLAMA_MODEL"];
     process.env["CODESIFT_EMBEDDING_PROVIDER"] = "ollama";
+    // The donor's vectors are embeddinggemma's; only a donor of the configured model is cloned.
+    process.env["CODESIFT_OLLAMA_MODEL"] = "embeddinggemma";
     resetConfigCache();
     try {
       const head = git(["rev-parse", "HEAD"], parentRoot).trim();
@@ -339,6 +342,8 @@ describe("seedWorktreeIndexFromParent", () => {
     } finally {
       if (prevProvider === undefined) delete process.env["CODESIFT_EMBEDDING_PROVIDER"];
       else process.env["CODESIFT_EMBEDDING_PROVIDER"] = prevProvider;
+      if (prevModel === undefined) delete process.env["CODESIFT_OLLAMA_MODEL"];
+      else process.env["CODESIFT_OLLAMA_MODEL"] = prevModel;
       resetConfigCache();
     }
   });

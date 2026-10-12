@@ -10,7 +10,10 @@ import {
  */
 describe("OllamaProvider — configurable model + batch endpoint", () => {
   const origFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = origFetch; });
+  afterEach(() => {
+    globalThis.fetch = origFetch;
+    setOllamaRunnerRetryDelaysForTesting(null);
+  });
 
   it("honours a configured model and dimensions", () => {
     const p = createEmbeddingProvider("ollama", {
@@ -90,7 +93,6 @@ describe("OllamaProvider — configurable model + batch endpoint", () => {
     const p = createEmbeddingProvider("ollama", { ollamaUrl: "http://localhost:11434", ollamaModel: "embeddinggemma" });
 
     const succeeded = await p.embed(["a"], "document").then(() => true, () => false);
-    setOllamaRunnerRetryDelaysForTesting(null);
 
     expect(succeeded).toBe(succeeds);
     expect(calls).toBe(expectedCalls);
