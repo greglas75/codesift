@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadEmbeddings, contentHashesForPath } from "../../src/storage/embedding-store.js";
+import { loadEmbeddings, contentHashesForPath, saveEmbeddings } from "../../src/storage/embedding-store.js";
 import { cloneChunksFromNearestDonor, cloneVectorsFromNearestDonor, seedEmbeddingsFromDonor } from "../../src/tools/index-tools/worktree-seed-embeddings.js";
 import { loadChunkManifest, loadChunkVectorsForReuse } from "../../src/storage/chunk-store.js";
 
@@ -82,6 +82,27 @@ describe("seedEmbeddingsFromDonor", () => {
       expect(existsSync(vectorsOf(targetIndex()))).toBe(false);
     }
     expect(readFileSync(vectorsOf(donorIndex()), "utf-8")).toContain(`${DONOR}:src/a.ts`);
+  });
+
+  // Bug it catches: a donor with a .vec cloned as ndjson (or not at all), or a stale file of the
+  // other kind left at the target and read instead of the clone (a .vec wins every read).
+  it("clones a .vec donor as a .vec and removes the target's ndjson", async () => {
+    await saveEmbeddings(vectorsOf(donorIndex()), new Map([[`${DONOR}:src/a.ts:a:1`, new Float32Array([1, 0])]]), new Map([[`${DONOR}:src/a.ts:a:1`, 7]]));
+    writeFileSync(metaOf(donorIndex()), JSON.stringify({ model: "embeddinggemma", provider: "ollama", dimensions: 2, symbol_count: 1, updated_at: 1 }));
+    const targetVec = vectorsOf(targetIndex()).replace(/\.ndjson$/, ".vec");
+    writeFileSync(vectorsOf(targetIndex()), JSON.stringify({ id: `${TARGET}:stale:x:1`, vec: [0, 1] }) + "\n");
+
+    const result = await seedEmbeddingsFromDonor(donorIndex(), DONOR, targetIndex(), TARGET);
+
+    if (!result.seeded) {
+      expect(result.reason).toMatch(/cannot clone/);
+      expect(existsSync(targetVec)).toBe(false);
+      return;
+    }
+    expect(existsSync(targetVec)).toBe(true);
+    expect(existsSync(vectorsOf(targetIndex()))).toBe(false);
+    expect([...(await loadEmbeddings(vectorsOf(targetIndex()))).keys()]).toEqual([`${TARGET}:src/a.ts:a:1`]);
+    expect(contentHashesForPath(vectorsOf(targetIndex())).get(`${TARGET}:src/a.ts:a:1`)).toBe(7);
   });
 
   it("rebases a chain of seeds from the ids actually in the bytes", async () => {

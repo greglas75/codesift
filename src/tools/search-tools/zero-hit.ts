@@ -86,9 +86,9 @@ export async function zeroHitFallback(
       };
     } else {
       const { existsSync } = await import("node:fs");
-      const { getEmbeddingPath } = await import("../../storage/embedding-store.js");
+      const { getEmbeddingPath, embeddingFileExists } = await import("../../storage/embedding-store.js");
       const { getChunkEmbeddingPath } = await import("../../storage/chunk-store.js");
-      const hasEmbeddings = existsSync(getEmbeddingPath(repoMetadata.index_path))
+      const hasEmbeddings = embeddingFileExists(getEmbeddingPath(repoMetadata.index_path))
         || existsSync(getChunkEmbeddingPath(repoMetadata.index_path));
 
       if (!hasEmbeddings) {

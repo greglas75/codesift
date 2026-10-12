@@ -1,7 +1,9 @@
-import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, unlink } from "node:fs/promises";
 import type { EmbeddingMeta } from "../types.js";
 import { loadSharedCache, appendSharedCache, contentKey } from "./shared-embedding-cache.js";
 import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
+import { readVectorFile, VectorFileError, writeVectorFile } from "./vector-file.js";
 
 /**
  * Get the embedding file path from an index path.
@@ -9,6 +11,39 @@ import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
  */
 export function getEmbeddingPath(indexPath: string): string {
   return indexPath.replace(/\.index\.json$/, ".embeddings.ndjson");
+}
+
+/**
+ * The binary twin of a `<hash>.embeddings.ndjson` path, `<hash>.embeddings.vec` (vector-file.ts), or
+ * null for a path of another shape (the tool-description cache keeps its own ndjson file).
+ */
+export function vectorFilePathFor(embeddingPath: string): string | null {
+  return embeddingPath.endsWith(".embeddings.ndjson")
+    ? embeddingPath.replace(/\.embeddings\.ndjson$/, ".embeddings.vec")
+    : null;
+}
+
+/**
+ * The file that holds a repo's vectors now: the `.vec` when there is one, else the ndjson, else null.
+ *
+ * Never decided by mtime. Every writer of one kind deletes the other (`saveEmbeddings`, the worktree
+ * seed's clone), and a clone may or may not carry the donor's mtime (`cp -c`, FICLONE), so "the newer
+ * of the two" would pick at random exactly where both can briefly exist.
+ */
+export function currentEmbeddingFile(embeddingPath: string): string | null {
+  const vec = vectorFilePathFor(embeddingPath);
+  if (vec && existsSync(vec)) return vec;
+  return existsSync(embeddingPath) ? embeddingPath : null;
+}
+
+/** Whether the repo has a vector file of either kind. */
+export function embeddingFileExists(embeddingPath: string): boolean {
+  return currentEmbeddingFile(embeddingPath) !== null;
+}
+
+/** `CODESIFT_VECTOR_FORMAT=ndjson` writes the old format (and removes the `.vec`): the rollback. */
+function writesVectorFiles(): boolean {
+  return process.env["CODESIFT_VECTOR_FORMAT"] !== "ndjson";
 }
 
 /**
@@ -110,14 +145,36 @@ export async function loadEmbeddings(
   // embedding files are GB-scale (e.g. 4.5GB), so a single slurp spikes the heap
   // by the full file size at load. readline keeps peak memory to one line plus
   // the resident Float32Array map.
-  const { createReadStream, existsSync, statSync, readFileSync } = await import("node:fs");
+  const { createReadStream, statSync, readFileSync } = await import("node:fs");
   const { createInterface } = await import("node:readline");
+
+  const rebase = idRebaseFor(embeddingPath, (p) => readFileSync(p, "utf-8"));
+
+  // The binary file when there is one: an exact resident size from its header (no text-to-binary
+  // ratio to guess), a checksum, and no parsing.
+  const vecPath = vectorFilePathFor(embeddingPath);
+  if (vecPath && existsSync(vecPath)) {
+    try {
+      const read = await readVectorFile(vecPath, { maxBytes, rebase });
+      if (read.overBudget) {
+        console.error(
+          `[codesift] embeddings skipped (above the ${(maxBytes / 1e6).toFixed(0)} MB budget) — ` +
+            `semantic falls back to BM25. Raise CODESIFT_MAX_EMBEDDING_MEM_MB to load it.`,
+        );
+        return embeddings;
+      }
+      for (const [id, h] of read.hashes) hashes.set(id, h);
+      return read.embeddings;
+    } catch (err) {
+      const message = err instanceof VectorFileError || err instanceof Error ? err.message : String(err);
+      console.error(`[codesift] ${vecPath}: ${message} — not using it`);
+      return embeddings;
+    }
+  }
 
   // Missing file → empty map (mirrors prior readFile catch). Guarding here avoids
   // an async ENOENT surfacing as an unhandled stream/readline error.
   if (!existsSync(embeddingPath)) return embeddings;
-
-  const rebase = idRebaseFor(embeddingPath, (p) => readFileSync(p, "utf-8"));
 
   // HARD memory bound. The streaming above only stops the *file text* from being
   // slurped in one shot — it still built the full resident Float32Array map, so a
@@ -211,6 +268,23 @@ export async function saveEmbeddings(
   embeddings: Map<string, Float32Array>,
   hashes?: ReadonlyMap<string, number>,
 ): Promise<void> {
+  const vecPath = vectorFilePathFor(embeddingPath);
+  let uniform = true;
+  let width = -1;
+  for (const vec of embeddings.values()) {
+    if (width === -1) width = vec.length;
+    else if (vec.length !== width) { uniform = false; break; }
+  }
+  if (vecPath && writesVectorFiles() && uniform) {
+    await cleanupOrphanTempFiles(vecPath);
+    // Halves of ndjson writes from before the switch, too: nothing else will ever sweep them.
+    await cleanupOrphanTempFiles(embeddingPath);
+    await writeVectorFile(vecPath, embeddings, hashes);
+    // The ndjson it replaces would otherwise be read by nothing and reclaimed by nobody.
+    await unlink(embeddingPath).catch(() => undefined);
+    return;
+  }
+
   // Sweep orphans from earlier runs that were killed mid-write. These files are
   // never overwritten (the name carries a timestamp), so without this they
   // accumulate indefinitely — see cleanupOrphanTempFiles.
@@ -243,6 +317,8 @@ export async function saveEmbeddings(
     // Atomic rename
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, embeddingPath);
+    // A `.vec` beside it would win every read (rollback mode, or vectors of mixed widths).
+    if (vecPath) await unlink(vecPath).catch(() => undefined);
   } catch (err) {
     // Clean up temp file on error
     try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }

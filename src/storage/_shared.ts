@@ -212,6 +212,7 @@ export const ARTIFACT_SUFFIXES = [
   "index.db-wal",
   "index.db-shm",
   "embeddings.ndjson",
+  "embeddings.vec",
   "embeddings.meta.json",
   "embeddings.partial.ndjson",
   "embeddings.partial.ndjson.lock",

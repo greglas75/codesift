@@ -112,7 +112,7 @@ async function nativeSymbolSearch(
   if (!ctx.repoMeta) return null;
   const { localEmbeddingsDisabled } = await import("../config.js");
   if (localEmbeddingsDisabled()) return null;
-  const { getEmbeddingPath, getEmbeddingMetaPath, loadEmbeddingMeta, idRebaseFor } =
+  const { getEmbeddingPath, getEmbeddingMetaPath, loadEmbeddingMeta, idRebaseFor, currentEmbeddingFile } =
     await import("../storage/embedding-store.js");
   const { expectedEmbeddingModel } = await import("../search/semantic.js");
   const indexPath = ctx.repoMeta.index_path;
@@ -123,14 +123,17 @@ async function nativeSymbolSearch(
     const want = expectedEmbeddingModel(ctx.config.embeddingProvider, ctx.config.localModel, ctx.config.ollamaModel);
     if (meta.model !== want) return null;
   }
-  const vectorPath = getEmbeddingPath(indexPath);
+  const embeddingPath = getEmbeddingPath(indexPath);
+  const vectorPath = currentEmbeddingFile(embeddingPath);
+  if (!vectorPath) return null;
   const { readFileSync } = await import("node:fs");
   const { searchNativeVectors } = await import("../search/native-vectors.js");
   const { findRepoSymbols } = await import("../tools/index-tools.js");
   return searchNativeVectors({
     repo,
     vectorPath,
-    rebase: idRebaseFor(vectorPath, (p) => readFileSync(p, "utf-8")),
+    // Keyed by the ndjson name, whichever file holds the vectors: it locates the meta.
+    rebase: idRebaseFor(embeddingPath, (p) => readFileSync(p, "utf-8")),
     listFiles: async () => {
       const symbols = await findRepoSymbols(repo, { withSource: false }, { skipFreshness: true });
       return { ids: symbols.map((s) => s.id), files: symbols.map((s) => s.file) };

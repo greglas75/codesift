@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { EmbeddingCheckpoint } from "../../storage/embedding-checkpoint.js";
 import { join, relative } from "node:path";
 import { createHash } from "node:crypto";
@@ -20,6 +19,7 @@ import {
   saveEmbeddings,
   saveEmbeddingMeta,
   getEmbeddingPath,
+  embeddingFileExists,
   getEmbeddingMetaPath,
   getPartialEmbeddingPath,
   residentEmbeddingBytes,
@@ -295,7 +295,7 @@ export async function embedSymbols(
     // whatever its donor was embedded with. A vector file with NO meta is the same unknown (a crash
     // between the two writes, or a file from before meta existed), so it is not reused either.
     const storedModel = (await loadEmbeddingMeta(metaPath))?.model;
-    const reuseMain = storedModel === undefined ? !existsSync(embeddingPath) : storedModel === provider.model;
+    const reuseMain = storedModel === undefined ? !embeddingFileExists(embeddingPath) : storedModel === provider.model;
     const existing = reuseMain ? await loadEmbeddings(embeddingPath, budget) : new Map<string, Float32Array>();
     // Seed the in-memory hash map from what was stored beside the vectors.
     // Without this the map starts empty on every process, every symbol looks

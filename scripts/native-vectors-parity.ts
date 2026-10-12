@@ -2,7 +2,7 @@
  * Semantic-search parity and load cost of the native vector set against the TypeScript one, on a REAL
  * vector file (ADR-006 stage 11, `docs/specs/2026-10-12-native-vectors-plan.md`).
  *
- *   node --max-old-space-size=12288 --import tsx scripts/native-vectors-parity.ts <embeddings.ndjson> <index.db copy> [--queries N] [--seed S]
+ *   node --max-old-space-size=12288 --import tsx scripts/native-vectors-parity.ts <embeddings.ndjson|.vec> <index.db copy> [--queries N] [--seed S]
  *
  * Loads the file both ways (the id rewrite in its meta applied by both), checks every vector bit for
  * bit and the id order, then ranks a query set — stored vectors with seeded noise — through
@@ -17,6 +17,7 @@ import { performance } from "node:perf_hooks";
 import { loadIndexSqlite } from "../src/storage/sqlite/index-io.js";
 import { closeAllIndexDbs } from "../src/storage/sqlite/connection.js";
 import { loadEmbeddings } from "../src/storage/embedding-store.js";
+import { readVectorFile } from "../src/storage/vector-file.js";
 import { searchSemantic } from "../src/search/semantic.js";
 import { filterEmbeddingsByFile } from "../src/retrieval/retrieval-utils.js";
 import { getNativeCore } from "../src/native/index.js";
@@ -68,9 +69,10 @@ async function main(): Promise<void> {
   closeAllIndexDbs();
 
   let t = performance.now();
-  const ts = await loadEmbeddings(vectorPath);
+  // A `.vec` given directly (e.g. a converted copy) is read as-is; ids are whatever it holds.
+  const ts = vectorPath.endsWith(".vec") ? (await readVectorFile(vectorPath)).embeddings : await loadEmbeddings(vectorPath);
   const tsMs = Math.round(performance.now() - t);
-  const rebase = rebaseOf(vectorPath);
+  const rebase = vectorPath.endsWith(".vec") ? null : rebaseOf(vectorPath);
   t = performance.now();
   const native = await core.loadVectors(vectorPath, rebase?.from ?? null, rebase?.to ?? null);
   const nativeMs = Math.round(performance.now() - t);

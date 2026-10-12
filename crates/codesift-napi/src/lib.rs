@@ -1244,7 +1244,7 @@ impl Task for LoadVectorsTask {
     type JsValue = NativeVectors;
 
     fn compute(&mut self) -> napi::Result<vectors::Vectors> {
-        vectors::Vectors::load_ndjson(&self.path, self.rebase.as_ref())
+        vectors::Vectors::load(&self.path, self.rebase.as_ref())
             .map_err(|e| napi::Error::new(Status::GenericFailure, format!("vectors load: {e}")))
     }
 
@@ -1255,7 +1255,7 @@ impl Task for LoadVectorsTask {
     }
 }
 
-/// An embeddings ndjson file, parsed off the main thread; `rebaseFrom`/`rebaseTo` rewrite an id prefix
+/// A repo's vector file (`.embeddings.vec`, or the older ndjson), read off the main thread; `rebaseFrom`/`rebaseTo` rewrite an id prefix
 /// (a worktree's clone of its donor's file).
 #[napi]
 pub fn load_vectors(

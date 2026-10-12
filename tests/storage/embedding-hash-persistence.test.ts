@@ -89,7 +89,13 @@ describe("content hashes survive a process restart", () => {
     // vector whose source text is unknown.
     const texts = corpus(20);
     const first = await batchEmbed(texts, new Map(), fakeEmbed, 16, "repoA");
-    await saveEmbeddings(embeddingPath, first); // no hashes — legacy shape
+    // An old file is ndjson: written in that format, without hashes.
+    process.env["CODESIFT_VECTOR_FORMAT"] = "ndjson";
+    try {
+      await saveEmbeddings(embeddingPath, first); // no hashes — legacy shape
+    } finally {
+      delete process.env["CODESIFT_VECTOR_FORMAT"];
+    }
 
     const raw = await readFile(embeddingPath, "utf-8");
     expect(raw).not.toContain('"h"');
@@ -107,12 +113,12 @@ describe("content hashes survive a process restart", () => {
     const embeddings = await batchEmbed(texts, new Map(), fakeEmbed, 16, "repoA");
     await saveEmbeddings(embeddingPath, embeddings, contentHashesFor("repoA"));
 
-    const lines = (await readFile(embeddingPath, "utf-8")).trim().split("\n");
-    expect(lines).toHaveLength(3);
-    for (const line of lines) {
-      const parsed = JSON.parse(line) as { id: string; vec: number[]; h?: number };
-      expect(typeof parsed.h).toBe("number");
-      expect(parsed.vec).toHaveLength(8);
-    }
+    // One vector file and nothing beside it; every vector comes back with its hash from that file.
+    const { readdir } = await import("node:fs/promises");
+    const { dirname } = await import("node:path");
+    expect((await readdir(dirname(embeddingPath))).filter((f) => f.startsWith("x."))).toEqual(["x.embeddings.vec"]);
+    const loaded = await loadEmbeddings(embeddingPath);
+    expect([...loaded.values()].every((v) => v.length === 8)).toBe(true);
+    expect([...contentHashesForPath(embeddingPath).keys()].sort()).toEqual([...embeddings.keys()].sort());
   });
 });

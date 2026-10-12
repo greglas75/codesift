@@ -75,6 +75,7 @@ describe("embedSymbols checkpoints and resumes", () => {
     failAfterCalls = 2; // two batches of two succeed, the third fails
     expect(await run()).toBe(false);
     expect(existsSync(main())).toBe(false);
+    expect(existsSync(main().replace(/\.ndjson$/, ".vec"))).toBe(false);
     const kept = readFileSync(partial(), "utf-8").trim().split("\n");
     expect(JSON.parse(kept[0] ?? "{}")).toEqual({ model: "model-a" });
     expect(kept).toHaveLength(1 + 4);
@@ -86,7 +87,8 @@ describe("embedSymbols checkpoints and resumes", () => {
 
     // Only the two symbols the failed run never reached.
     expect(calls.flat()).toHaveLength(2);
-    expect(readFileSync(main(), "utf-8").trim().split("\n")).toHaveLength(6);
+    const { loadEmbeddings } = await import("../../src/storage/embedding-store.js");
+    expect((await loadEmbeddings(main())).size).toBe(6);
     // Folded into the main file, so the checkpoint is gone.
     expect(existsSync(partial())).toBe(false);
   });

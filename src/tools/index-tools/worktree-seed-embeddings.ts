@@ -24,7 +24,7 @@
  */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { constants, existsSync, statSync } from "node:fs";
+import { constants, statSync } from "node:fs";
 import { copyFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -36,10 +36,13 @@ import {
   type ChunkIndexManifest,
 } from "../../storage/chunk-store.js";
 import {
+  currentEmbeddingFile,
+  embeddingFileExists,
   getEmbeddingMetaPath,
   getEmbeddingPath,
   loadEmbeddingMeta,
   saveEmbeddingMeta,
+  vectorFilePathFor,
 } from "../../storage/embedding-store.js";
 
 export interface EmbeddingSeedResult {
@@ -68,7 +71,7 @@ async function cloneFile(source: string, target: string): Promise<void> {
 
 /** True when `indexPath` has a vector file with at least one vector, by its meta. */
 export async function hasSymbolEmbeddings(indexPath: string): Promise<boolean> {
-  if (!existsSync(getEmbeddingPath(indexPath))) return false;
+  if (!embeddingFileExists(getEmbeddingPath(indexPath))) return false;
   const meta = await loadEmbeddingMeta(getEmbeddingMetaPath(indexPath));
   return (meta?.symbol_count ?? 0) > 0;
 }
@@ -79,12 +82,19 @@ export async function seedEmbeddingsFromDonor(
   targetIndexPath: string,
   targetName: string,
 ): Promise<EmbeddingSeedResult> {
-  const donorVectors = getEmbeddingPath(donorIndexPath);
-  if (!existsSync(donorVectors)) return { seeded: false, reason: "donor has no vectors" };
+  const donorVectors = currentEmbeddingFile(getEmbeddingPath(donorIndexPath));
+  if (!donorVectors) return { seeded: false, reason: "donor has no vectors" };
   const donorMeta = await loadEmbeddingMeta(getEmbeddingMetaPath(donorIndexPath));
   if (!donorMeta || donorMeta.symbol_count <= 0) return { seeded: false, reason: "donor has no vectors" };
 
-  const targetVectors = getEmbeddingPath(targetIndexPath);
+  // The clone keeps the donor's format (`.vec` or ndjson), and the target's file of the OTHER kind is
+  // removed once the clone is in place: `currentEmbeddingFile` prefers a `.vec`, so a stale one left
+  // beside a cloned ndjson would be read instead of it.
+  const targetNdjson = getEmbeddingPath(targetIndexPath);
+  const targetVec = vectorFilePathFor(targetNdjson);
+  const donorIsVec = donorVectors !== getEmbeddingPath(donorIndexPath);
+  const targetVectors = donorIsVec && targetVec ? targetVec : targetNdjson;
+  const otherKind = targetVectors === targetNdjson ? targetVec : targetNdjson;
   const tempVectors = `${targetVectors}.seeding.${process.pid}`;
   try {
     await cloneFile(donorVectors, tempVectors);
@@ -113,6 +123,7 @@ export async function seedEmbeddingsFromDonor(
     });
     metaWritten = true;
     await rename(tempVectors, targetVectors);
+    if (otherKind) await unlink(otherKind).catch(() => undefined);
     return { seeded: true, vectors: donorMeta.symbol_count };
   } catch (err) {
     await unlink(tempVectors).catch(() => undefined);

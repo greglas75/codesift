@@ -32,6 +32,7 @@ import {
 import { stopWatcher } from "../../storage/watcher.js";
 import {
   getEmbeddingPath,
+  vectorFilePathFor,
   getEmbeddingMetaPath,
   loadEmbeddings,
 } from "../../storage/embedding-store.js";
@@ -103,7 +104,9 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   const chunkEmbeddingPath = getChunkEmbeddingPath(meta.index_path);
   const graphStorePath = getGraphPath(meta.index_path);
   const snapshotPath = getSnapshotPath(meta.index_path);
-  for (const fp of [meta.index_path, embeddingPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath, graphStorePath, snapshotPath]) {
+  const vectorPath = vectorFilePathFor(embeddingPath);
+  for (const fp of [meta.index_path, embeddingPath, vectorPath, embeddingMetaPath, chunkPath, chunkEmbeddingPath, graphStorePath, snapshotPath]) {
+    if (!fp) continue;
     try { await unlink(fp); } catch { /* File may not exist */ }
   }
 

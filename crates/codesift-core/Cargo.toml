@@ -16,6 +16,8 @@ serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
 # Vectors (stage 11): `float_roundtrip` makes text → f64 correctly rounded, as `JSON.parse` is, so a
 # loaded vector is bit-identical to the TypeScript loader's `Float32Array`.
 serde = { version = "1", features = ["derive"] }
+# The vector file's checksum: zlib's CRC-32, which the TypeScript writer computes with `zlib.crc32`.
+crc32fast = "1"
 
 # BM25 (stage 2): the comment and import patterns of bm25.ts, and substring search for centrality.
 regex = "1"

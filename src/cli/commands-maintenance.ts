@@ -447,6 +447,25 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
     }
   }
 
+  // An ndjson vector file beside a `.vec` is read by nothing: `currentEmbeddingFile` takes the `.vec`
+  // whenever there is one. Every writer of a `.vec` removes the ndjson right after its rename, so one
+  // is left only by a process that died between the two — and at 7.6 GB for one rdesigner worktree,
+  // a leftover is worth reclaiming rather than leaving to a reindex that may never come.
+  let vectorsSuperseded = 0;
+  for (const name of readdirSync(dataDir)) {
+    if (!/^[0-9a-f]{8,}\.embeddings\.ndjson$/.test(name)) continue;
+    const full = join(dataDir, name);
+    if (!existsSync(full.replace(/\.ndjson$/, ".vec"))) continue;
+    try {
+      const fileStat = statSync(full);
+      if (Date.now() - fileStat.mtimeMs < pruneGraceMs) continue;
+      if (!dryRun) unlinkSync(full);
+      bytes += fileStat.size;
+      files++;
+      vectorsSuperseded++;
+    } catch { /* already gone */ }
+  }
+
   // Shared-cache versions have no repository hash prefix, so the artifact
   // sweep cannot discover superseded formats. Keep the current version and
   // reclaim only older derived cache files.
@@ -517,6 +536,7 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
 
   return {
     bm25_superseded_format: bm25Superseded,
+    vectors_superseded_ndjson: vectorsSuperseded,
     wal_checkpointed: walCheckpointed,
     wal_reclaimed_gb: +((walBefore - walAfter) / 1e9).toFixed(2),
     indeterminate_databases: indeterminate.length,

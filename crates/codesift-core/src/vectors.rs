@@ -20,10 +20,59 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, BufReader, Read};
 use std::path::Path;
 
 use crate::bm25::is_test_file;
+
+/// The binary vector file (`storage/vector-file.ts` documents the layout and is its writer).
+pub const VEC_MAGIC: [u8; 8] = *b"CSVEC\0\0\x01";
+const VEC_TRAILER: &[u8; 4] = b"CEND";
+const VEC_ALIGN: usize = 64;
+
+#[derive(Deserialize)]
+struct VecHeader {
+    dims: usize,
+    count: usize,
+}
+
+fn invalid(msg: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, format!("vector file: {msg}"))
+}
+
+/// A reader that checksums what it reads and counts the offset.
+struct Hashed<R: Read> {
+    inner: R,
+    hasher: crc32fast::Hasher,
+    offset: usize,
+}
+
+impl<R: Read> Hashed<R> {
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.inner.read_exact(buf).map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                invalid("truncated")
+            } else {
+                e
+            }
+        })?;
+        self.hasher.update(buf);
+        self.offset += buf.len();
+        Ok(())
+    }
+
+    fn take(&mut self, n: usize) -> io::Result<Vec<u8>> {
+        let mut buf = vec![0u8; n];
+        self.read_exact(&mut buf)?;
+        Ok(buf)
+    }
+
+    fn u32(&mut self) -> io::Result<u32> {
+        let mut b = [0u8; 4];
+        self.read_exact(&mut b)?;
+        Ok(u32::from_le_bytes(b))
+    }
+}
 
 /// A position with no file attached: never a search candidate.
 const NO_FILE: u32 = u32::MAX;
@@ -108,6 +157,106 @@ fn norm(v: &[f32]) -> f64 {
 }
 
 impl Vectors {
+    /// Either format, told apart by the first bytes: a vector file, else ndjson.
+    pub fn load(path: &Path, rebase: Option<&Rebase>) -> io::Result<Vectors> {
+        let mut magic = [0u8; 8];
+        let n = File::open(path)?.read(&mut magic)?;
+        if n == magic.len() && magic == VEC_MAGIC {
+            Vectors::load_vec(path, rebase)
+        } else {
+            Vectors::load_ndjson(path, rebase)
+        }
+    }
+
+    /// Read a vector file. A foreign, truncated or corrupt file is an error — the whole file, since
+    /// one checksum cannot say which vector is wrong.
+    pub fn load_vec(path: &Path, rebase: Option<&Rebase>) -> io::Result<Vectors> {
+        let file = File::open(path)?;
+        let size = file.metadata()?.len() as usize;
+        let mut r = Hashed {
+            inner: BufReader::with_capacity(READ_BLOCK, file),
+            hasher: crc32fast::Hasher::new(),
+            offset: 0,
+        };
+        let head = r.take(12)?;
+        if head[..8] != VEC_MAGIC {
+            return Err(invalid("not a vector file (magic)"));
+        }
+        let header_len = u32::from_le_bytes(head[8..12].try_into().unwrap()) as usize;
+        if header_len > size {
+            return Err(invalid("truncated"));
+        }
+        let header: VecHeader =
+            serde_json::from_slice(&r.take(header_len)?).map_err(|_| invalid("bad header"))?;
+        let (dims, count) = (header.dims, header.count);
+        if count > size {
+            return Err(invalid("bad header"));
+        }
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            let len = r.u32()? as usize;
+            if len > size {
+                return Err(invalid("truncated"));
+            }
+            // Lossy like Buffer#toString("utf-8"), so both readers see the same id.
+            ids.push(String::from_utf8_lossy(&r.take(len)?).into_owned());
+        }
+        let flags = r.take(count)?;
+        let hashes = r.take(count * 4)?;
+        let pad = (VEC_ALIGN - r.offset % VEC_ALIGN) % VEC_ALIGN;
+        if r.take(pad)?.iter().any(|&b| b != 0) {
+            return Err(invalid("bad padding"));
+        }
+        let row = dims * 4;
+        if r.offset + count * row + 8 != size {
+            return Err(invalid("size does not match the header"));
+        }
+        if dims == 0 && count > 0 {
+            return Err(invalid("zero-width vectors"));
+        }
+
+        let mut out = Vectors::default();
+        out.data.reserve_exact(count * dims);
+        let rows_per_read = (READ_BLOCK / row.max(1)).max(1);
+        let mut buf = vec![0u8; rows_per_read * row];
+        let mut vec = vec![0f32; dims];
+        let mut next = 0;
+        while next < count {
+            let rows = rows_per_read.min(count - next);
+            r.read_exact(&mut buf[..rows * row])?;
+            for k in 0..rows {
+                let bytes = &buf[k * row..(k + 1) * row];
+                for (d, v) in vec.iter_mut().enumerate() {
+                    *v = f32::from_le_bytes(bytes[d * 4..d * 4 + 4].try_into().unwrap());
+                }
+                let i = next + k;
+                let id = match rebase {
+                    Some(rb) if ids[i].starts_with(&rb.from) => {
+                        format!("{}{}", rb.to, &ids[i][rb.from.len()..])
+                    }
+                    _ => std::mem::take(&mut ids[i]),
+                };
+                let h = (flags[i] == 1)
+                    .then(|| u32::from_le_bytes(hashes[i * 4..i * 4 + 4].try_into().unwrap()));
+                out.insert(id, &vec, h);
+            }
+            next += rows;
+        }
+        let computed = r.hasher.clone().finalize();
+        let mut trailer = [0u8; 8];
+        r.inner
+            .read_exact(&mut trailer)
+            .map_err(|_| invalid("missing trailer"))?;
+        if &trailer[4..] != VEC_TRAILER {
+            return Err(invalid("missing trailer"));
+        }
+        if u32::from_le_bytes(trailer[..4].try_into().unwrap()) != computed {
+            return Err(invalid("checksum mismatch"));
+        }
+        out.data.shrink_to_fit();
+        Ok(out)
+    }
+
     /// Parse an embeddings ndjson file. A missing file is an error; malformed lines are skipped.
     pub fn load_ndjson(path: &Path, rebase: Option<&Rebase>) -> io::Result<Vectors> {
         let mut file = File::open(path)?;
@@ -452,6 +601,92 @@ mod tests {
         let top = v.search(&[1.0, 2.0], 37, None, false).unwrap();
         let ids = |h: &[Hit]| h.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&top), ids(&all[..37]));
+    }
+
+    /// The layout `storage/vector-file.ts` writes, for the reader's tests.
+    fn vec_file(rows: &[(&str, &[f32], Option<u32>)]) -> Vec<u8> {
+        let dims = rows.first().map_or(0, |r| r.1.len());
+        let mut out = Vec::new();
+        out.extend_from_slice(&VEC_MAGIC);
+        let header = format!(r#"{{"dims":{dims},"count":{}}}"#, rows.len());
+        out.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        out.extend_from_slice(header.as_bytes());
+        for (id, _, _) in rows {
+            out.extend_from_slice(&(id.len() as u32).to_le_bytes());
+            out.extend_from_slice(id.as_bytes());
+        }
+        for (_, _, h) in rows {
+            out.push(u8::from(h.is_some()));
+        }
+        for (_, _, h) in rows {
+            out.extend_from_slice(&h.unwrap_or(0).to_le_bytes());
+        }
+        while out.len() % VEC_ALIGN != 0 {
+            out.push(0);
+        }
+        for (_, v, _) in rows {
+            for x in *v {
+                out.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        let crc = crc32fast::hash(&out);
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(VEC_TRAILER);
+        out
+    }
+
+    fn file_with(bytes: &[u8]) -> tempfile::NamedTempFile {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(bytes).unwrap();
+        f
+    }
+
+    #[test]
+    fn a_vector_file_loads_like_the_ndjson_it_replaces() {
+        // Same content both ways — ids, values, hashes, a repeated id, the rebase.
+        let rows: [(&str, &[f32], Option<u32>); 3] = [
+            ("d:a", &[0.1, -2.5], Some(9)),
+            ("d:b", &[3.0, 4.0], None),
+            ("d:a", &[1.0, 0.0], None),
+        ];
+        let f = file_with(&vec_file(&rows));
+        let nd = write(&[
+            r#"{"id":"d:a","vec":[0.10000000149011612,-2.5],"h":9}"#,
+            r#"{"id":"d:b","vec":[3,4]}"#,
+            r#"{"id":"d:a","vec":[1,0]}"#,
+        ]);
+        let rebase = Rebase {
+            from: "d:".into(),
+            to: "w:".into(),
+        };
+        let a = Vectors::load(f.path(), Some(&rebase)).unwrap();
+        let b = Vectors::load(nd.path(), Some(&rebase)).unwrap();
+        assert_eq!(a.ids, ["w:a", "w:b"]);
+        assert_eq!(a.ids, b.ids);
+        assert_eq!(a.data, b.data);
+        assert_eq!(a.hashes, b.hashes);
+        assert_eq!(a.norms, b.norms);
+    }
+
+    #[test]
+    fn a_damaged_vector_file_is_refused_whole() {
+        // Bug it catches: a flipped byte in the matrix served as a valid but wrong vector.
+        let rows: [(&str, &[f32], Option<u32>); 2] =
+            [("a", &[1.0, 2.0], None), ("b", &[3.0, 4.0], None)];
+        let good = vec_file(&rows);
+        let mut flipped = good.clone();
+        let at = good.len() - 9;
+        flipped[at] ^= 0x40;
+        let err = Vectors::load(file_with(&flipped).path(), None)
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("checksum"), "{err}");
+        let truncated = &good[..good.len() - 12];
+        assert!(Vectors::load(file_with(truncated).path(), None).is_err());
+        assert_eq!(
+            Vectors::load(file_with(&good).path(), None).unwrap().len(),
+            2
+        );
     }
 
     #[test]

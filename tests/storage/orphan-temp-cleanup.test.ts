@@ -70,6 +70,6 @@ describe("cleanupOrphanTempFiles", () => {
 
     await saveEmbeddings(target, new Map([["sym:1", new Float32Array([0.1, 0.2])]]));
 
-    expect(await readdir(dir)).toEqual(["abc.embeddings.ndjson"]);
+    expect(await readdir(dir)).toEqual(["abc.embeddings.vec"]);
   });
 });

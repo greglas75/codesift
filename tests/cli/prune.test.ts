@@ -239,6 +239,30 @@ describe("codesift prune", () => {
     expect(JSON.parse(stdout).bm25_superseded_format).toBe(1);
   });
 
+  // Bug it catches: a 7.6 GB ndjson left by a writer that died between renaming the .vec and removing
+  // the ndjson, kept forever because its hash is live.
+  it("reclaims a live repo's ndjson vectors once a .vec replaces them", async () => {
+    const vec = join(dir, `${LIVE}.embeddings.vec`);
+    const ndjson = join(dir, `${LIVE}.embeddings.ndjson`);
+    writeFileSync(vec, "v");
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    utimesSync(ndjson, old, old);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(ndjson)).toBe(false);
+    expect(existsSync(vec)).toBe(true);
+    expect(JSON.parse(stdout).vectors_superseded_ndjson).toBe(1);
+  });
+
+  it("keeps a live repo's ndjson vectors when there is no .vec", async () => {
+    const ndjson = join(dir, `${LIVE}.embeddings.ndjson`);
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    utimesSync(ndjson, old, old);
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(ndjson)).toBe(true);
+    expect(JSON.parse(stdout).vectors_superseded_ndjson).toBe(0);
+  });
+
   it("keeps a BM25 cache in the current format, and one whose header it cannot read", async () => {
     const { bm25FormatVersion } = await import("../../src/search/bm25-store.js");
     const current = join(dir, `${LIVE}.bm25.ndjson`);
