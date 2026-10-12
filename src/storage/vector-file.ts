@@ -47,6 +47,38 @@ export function crc32(data: Uint8Array, previous = 0): number {
   return (c ^ 0xffffffff) >>> 0;
 }
 
+/**
+ * Whether `embeddings` goes to disk as a vector file: unless `CODESIFT_VECTOR_FORMAT=ndjson` (the
+ * rollback), and only when every vector has one width — a matrix cannot hold mixed ones, and those
+ * keep the ndjson rather than fail the save.
+ */
+export function shouldWriteVectorFile(embeddings: ReadonlyMap<string, Float32Array>): boolean {
+  if (process.env["CODESIFT_VECTOR_FORMAT"] === "ndjson") return false;
+  let width = -1;
+  for (const vec of embeddings.values()) {
+    if (width === -1) width = vec.length;
+    else if (vec.length !== width) return false;
+  }
+  // Zero-width vectors would make a matrix of nothing that the reader refuses; ndjson keeps them.
+  return width !== 0;
+}
+
+/** Whether the file at `path` is a vector file (by its magic), as opposed to ndjson. False when unreadable. */
+export async function isVectorFile(path: string): Promise<boolean> {
+  try {
+    const fh = await open(path, "r");
+    try {
+      const head = Buffer.alloc(VECTOR_FILE_MAGIC.length);
+      const { bytesRead } = await fh.read(head, 0, head.length, 0);
+      return bytesRead === head.length && head.equals(VECTOR_FILE_MAGIC);
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 export interface VectorFileEntry {
   id: string;
   vec: Float32Array;
@@ -162,6 +194,39 @@ export async function writeVectorFile(
   }
 }
 
+/**
+ * Whether `path` is a whole, intact vector file: its magic, its trailer, and the CRC of every byte
+ * before the trailer — streamed, nothing materialised. What `prune` asks before deleting the ndjson
+ * a `.vec` replaced, so a damaged `.vec` never costs the only copy of the vectors.
+ */
+export async function verifyVectorFile(path: string): Promise<boolean> {
+  try {
+    const fh = await open(path, "r");
+    try {
+      const size = (await fh.stat()).size;
+      if (size < VECTOR_FILE_MAGIC.length + 4 + 8) return false;
+      const buf = Buffer.allocUnsafeSlow(Math.min(CHUNK_BYTES, size));
+      let crc = 0;
+      let pos = 0;
+      const end = size - 8;
+      while (pos < end) {
+        const { bytesRead } = await fh.read(buf, 0, Math.min(buf.length, end - pos), pos);
+        if (bytesRead === 0) return false;
+        if (pos === 0 && !buf.subarray(0, VECTOR_FILE_MAGIC.length).equals(VECTOR_FILE_MAGIC)) return false;
+        crc = crc32(buf.subarray(0, bytesRead), crc);
+        pos += bytesRead;
+      }
+      const trailer = Buffer.alloc(8);
+      const { bytesRead } = await fh.read(trailer, 0, 8, end);
+      return bytesRead === 8 && trailer.subarray(4).equals(TRAILER_TAG) && trailer.readUInt32LE(0) === crc >>> 0;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** Why a file could not be read, for the one log line its caller prints. */
 export class VectorFileError extends Error {
   constructor(message: string) {
@@ -211,7 +276,12 @@ export async function readVectorFile(path: string, opts: ReadVectorFileOptions =
     const header = JSON.parse((await take(head.readUInt32LE(8))).toString("utf-8")) as { dims?: unknown; count?: unknown };
     const dims = header.dims;
     const count = header.count;
-    if (typeof dims !== "number" || typeof count !== "number" || !Number.isInteger(dims) || !Number.isInteger(count) || dims < 0 || count < 0) {
+    // Bounded by the file before anything is allocated from them: a damaged header must be an error,
+    // not an array of whatever length it claims.
+    if (
+      typeof dims !== "number" || typeof count !== "number" || !Number.isInteger(dims) || !Number.isInteger(count) ||
+      dims < 0 || count < 0 || count > size || dims > size
+    ) {
       throw new VectorFileError("bad header");
     }
 

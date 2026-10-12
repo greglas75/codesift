@@ -26,8 +26,11 @@ interface Entry {
   built?: NativeVectorsHandle;
   /** Bumped by `markNativeVectorFilesStale`; files are attached for `attachedFor`. */
   filesWanted: number;
-  attachedFor?: number;
+  /** `filesWanted` and the source's `filesVersion` the attached files describe. */
+  attachedFor?: string;
   attaching?: Promise<void> | undefined;
+  /** Set by `retire`: a count of 0 then means "released under this call", not "an empty file". */
+  retired?: boolean;
 }
 
 /** Repo name → its set. Insertion order is use order (oldest first). */
@@ -35,8 +38,17 @@ const sets = new Map<string, Entry>();
 let staleCounter = 0;
 
 function retire(entry: Entry): void {
+  entry.retired = true;
   // A search in flight holds the read lock; release waits for it, then later calls answer empty.
-  entry.set.then((s) => s.release(), () => undefined);
+  // Never a rejection: one left unhandled would end the daemon (a poisoned lock throws here).
+  entry.set.then(
+    (s) => {
+      try {
+        s.release();
+      } catch { /* the set is unusable either way; its memory goes with the handle */ }
+    },
+    () => undefined,
+  );
 }
 
 function footprintOf(entry: Entry): number | undefined {
@@ -50,80 +62,154 @@ function footprintOf(entry: Entry): number | undefined {
 /** The symbol ids of the index and their files, as `attachFiles` takes them. */
 export type ListFiles = () => Promise<{ ids: string[]; files: string[] }>;
 
-export interface NativeVectorQuery {
-  repo: string;
+/** Which vectors: a repo's symbols (`set` = the repo name) or its chunks (`<repo>:chunks`). */
+export interface NativeVectorSource {
+  /** The cache key: the repo name for symbol vectors, `chunkSetKey(repo)` for chunk vectors. */
+  set: string;
   vectorPath: string;
   rebase: { from: string; to: string } | null;
   listFiles: ListFiles;
+  /**
+   * Moves when ANOTHER process changed the index (SQLite `data_version`): a CLI hook's `index_file`
+   * never reaches `markNativeVectorFilesStale` in the daemon. Absent = in-process invalidation only.
+   */
+  filesVersion?: () => Promise<number>;
+}
+
+export interface NativeVectorQuery extends NativeVectorSource {
   query: Float32Array;
   topK: number;
   contains: string | undefined;
   excludeTests: boolean;
 }
 
-/** `{ hits, dims }`, or null when the native set cannot answer (no core, no file, a failed load). */
-export async function searchNativeVectors(q: NativeVectorQuery): Promise<{ hits: NativeVectorHit[]; dims: number } | null> {
+/** The key of a repo's chunk vectors (`chunkCacheKey` in index-tools/state.ts spells the same). */
+export function chunkSetKey(repo: string): string {
+  return `${repo}:chunks`;
+}
+
+/**
+ * Run `use` on the source's set, loaded (or reused), within budget and with its files attached — or
+ * null when the native set cannot answer (no core, no file, no vectors in it, a failed load, attach or
+ * search).
+ */
+async function withNativeSet<T>(src: NativeVectorSource, use: (set: NativeVectorsHandle) => Promise<T>): Promise<T | null> {
   const core = getNativeCore("vectors");
   if (!core || typeof core.loadVectors !== "function") return null;
   let key: string;
   try {
-    const s = await stat(q.vectorPath);
+    const s = await stat(src.vectorPath);
     if (!s.isFile() || s.size === 0) return null;
-    key = `${q.vectorPath}|${s.mtimeMs}|${s.size}|${q.rebase ? `${q.rebase.from}>${q.rebase.to}` : ""}`;
+    key = JSON.stringify([src.vectorPath, s.mtimeMs, s.size, src.rebase?.from ?? null, src.rebase?.to ?? null]);
   } catch {
     return null;
   }
 
-  let entry = sets.get(q.repo);
+  let entry = sets.get(src.set);
   if (!entry || entry.key !== key) {
     if (entry) retire(entry);
     const fresh: Entry = {
       key,
-      set: core.loadVectors(q.vectorPath, q.rebase?.from ?? null, q.rebase?.to ?? null),
+      set: core.loadVectors(src.vectorPath, src.rebase?.from ?? null, src.rebase?.to ?? null),
       filesWanted: ++staleCounter,
     };
     fresh.set.then((s) => { fresh.built = s; }, () => undefined);
     entry = fresh;
   }
-  sets.delete(q.repo);
-  sets.set(q.repo, entry);
+  sets.delete(src.set);
+  sets.set(src.set, entry);
 
+  let set: NativeVectorsHandle;
   try {
-    const set = await entry.set;
+    set = await entry.set;
     const sizes = [...sets].map(([k, e]) => ({ key: k, bytes: footprintOf(e) }));
-    for (const evict of entriesOverBudget(sizes, vectorCacheBudgetBytes(), q.repo)) {
+    for (const evict of entriesOverBudget(sizes, vectorCacheBudgetBytes(), src.set)) {
       const evicted = sets.get(evict);
       if (!evicted) continue;
       retire(evicted);
       sets.delete(evict);
     }
-    if (set.dims !== q.query.length) return { hits: [], dims: set.dims };
-    await ensureFiles(entry, set, q.listFiles);
-    const hits = await set.searchAsync(q.query, q.topK, q.contains ?? null, q.excludeTests);
-    return { hits, dims: set.dims };
+    // A released set (evicted by another call, or idle release) answers as empty with width 0, which
+    // a caller would read as "vectors of another width". It is a failure of this path, not an answer.
+    if (entry.retired) throw new Error("the set was released during this call");
   } catch (err) {
-    // A failed load must not stay cached as this repo's answer; a released set (evicted mid-call)
-    // answers through the TypeScript path this once.
-    if (sets.get(q.repo) === entry) {
-      retire(entry);
-      sets.delete(q.repo);
-    }
+    return dropAfterFailure(src.set, entry, err);
+  }
+  // A file that holds no vectors stays cached: reloading and logging it on every query buys nothing.
+  if (set.count === 0 || set.dims === 0) return null;
+  try {
+    await ensureFiles(entry, set, src);
+  } catch (err) {
+    // The set loaded fine; only the file list failed (e.g. SQLITE_BUSY behind an indexer's write).
+    // Keep the set — dropping it would turn a transient lock into a multi-second reload — and answer
+    // through the TypeScript path this once; the next call retries the attach.
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`[codesift] native vectors for ${q.repo} unavailable (${message}) — using the TypeScript path`);
+    console.error(`[codesift] native vectors for ${src.set}: attaching files failed (${message}) — using the TypeScript path`);
     return null;
+  }
+  try {
+    return await use(set);
+  } catch (err) {
+    return dropAfterFailure(src.set, entry, err);
   }
 }
 
-async function ensureFiles(entry: Entry, set: NativeVectorsHandle, listFiles: ListFiles): Promise<void> {
-  while (entry.attachedFor !== entry.filesWanted) {
+/** A failed load or search drops the set, so the next call loads it again rather than reusing it. */
+function dropAfterFailure(setKey: string, entry: Entry, err: unknown): null {
+  if (sets.get(setKey) === entry) {
+    retire(entry);
+    sets.delete(setKey);
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[codesift] native vectors for ${setKey} unavailable (${message}) — using the TypeScript path`);
+  return null;
+}
+
+/** `{ hits, dims }` of `searchSemantic`, or null when the native set cannot answer. */
+export async function searchNativeVectors(q: NativeVectorQuery): Promise<{ hits: NativeVectorHit[]; dims: number } | null> {
+  return withNativeSet(q, async (set) => {
+    // Read before the search: a release racing it leaves the set reporting width 0 afterwards.
+    const dims = set.dims;
+    if (dims !== q.query.length) return { hits: [], dims };
+    const hits = await set.searchAsync(q.query, q.topK, q.contains ?? null, q.excludeTests);
+    return { hits, dims };
+  });
+}
+
+export interface NativeRrfQuery extends NativeVectorSource {
+  queries: Float32Array[];
+  topK: number;
+  contains: string | undefined;
+  excludeTests: boolean;
+  /** Contributions added after the queries' fusion, in order (a hybrid query's text matches). */
+  extra: ReadonlyArray<readonly [string, number]>;
+}
+
+/** The fused top ids (`computeRRFScores` + extras + the stable cut) and the stored width, or null. */
+export async function rankNativeRrf(q: NativeRrfQuery): Promise<{ ids: string[]; dims: number } | null> {
+  return withNativeSet(q, async (set) => {
+    // A query of another width adds nothing, as in `computeRRFScores`; the caller reads `dims`.
+    const dims = set.dims;
+    const hits = await set.searchRrfAsync(
+      q.queries, q.topK, q.contains ?? null, q.excludeTests,
+      q.extra.map(([id]) => id), q.extra.map(([, score]) => score),
+    );
+    return { ids: hits.map((h) => h.id), dims };
+  });
+}
+
+async function ensureFiles(entry: Entry, set: NativeVectorsHandle, src: NativeVectorSource): Promise<void> {
+  const version = src.filesVersion ? await src.filesVersion() : 0;
+  const wantedKey = () => `${entry.filesWanted}|${version}`;
+  while (entry.attachedFor !== wantedKey()) {
     if (entry.attaching) {
       await entry.attaching;
       continue;
     }
-    const wanted = entry.filesWanted;
+    const wanted = wantedKey();
     entry.attaching = (async () => {
-      const { ids, files } = await listFiles();
-      set.attachFiles(ids, files);
+      const { ids, files } = await src.listFiles();
+      await set.attachFilesAsync(ids.join("\0"), files.join("\0"));
       entry.attachedFor = wanted;
     })();
     try {
@@ -136,8 +222,20 @@ async function ensureFiles(entry: Entry, set: NativeVectorsHandle, listFiles: Li
 
 /** The repo's symbols changed (an edit, a reindex): attach their files again before the next search. */
 export function markNativeVectorFilesStale(repo: string): void {
-  const entry = sets.get(repo);
-  if (entry) entry.filesWanted = ++staleCounter;
+  for (const key of [repo, chunkSetKey(repo)]) {
+    const entry = sets.get(key);
+    if (entry) entry.filesWanted = ++staleCounter;
+  }
+}
+
+/** The repo was removed or its index invalidated: free its sets now rather than at the next eviction. */
+export function dropNativeVectors(repo: string): void {
+  for (const key of [repo, chunkSetKey(repo)]) {
+    const entry = sets.get(key);
+    if (!entry) continue;
+    retire(entry);
+    sets.delete(key);
+  }
 }
 
 /** Free every set now (idle release). */

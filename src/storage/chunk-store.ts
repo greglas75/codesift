@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import { finished } from "node:stream/promises";
 import { basename, dirname, join } from "node:path";
 import type { CodeChunk } from "../types.js";
+import { isVectorFile, readVectorFile, shouldWriteVectorFile, writeVectorFile } from "./vector-file.js";
 import { cleanupOrphanTempFiles } from "./_shared.js";
 
 // ---------------------------------------------------------------------------
@@ -337,6 +338,13 @@ export async function saveChunkEmbeddings(
   // Same orphan sweep as saveEmbeddings — a killed process leaves these behind.
   await cleanupOrphanTempFiles(embeddingPath);
 
+  // The binary vector file under the same name (a generation file's name says nothing about its
+  // format; readers tell them apart by the magic). Same content, ~5x smaller, read without parsing.
+  if (shouldWriteVectorFile(embeddings)) {
+    await writeVectorFile(embeddingPath, embeddings, hashes);
+    return;
+  }
+
   const tmpPath = `${embeddingPath}.tmp.${process.pid}.${randomUUID()}`;
   const { createWriteStream } = await import("node:fs");
   const stream = createWriteStream(tmpPath, { encoding: "utf-8" });
@@ -419,6 +427,23 @@ export async function loadChunkEmbeddings(
   resolvedPath?: string,
 ): Promise<Map<string, Float32Array> | null> {
   const activePath = resolvedPath ?? await resolveActiveChunkFile(embeddingPath, "embeddings");
+  if (await isVectorFile(activePath)) {
+    // All or nothing, like the ndjson path: a partial map would answer with misleading hits.
+    try {
+      const read = await readVectorFile(activePath, { maxBytes: maxResidentBytes });
+      if (read.overBudget) {
+        console.error(
+          `[codesift] chunk embeddings skipped: resident vectors exceed ` +
+            `${Math.round(maxResidentBytes / 1024 / 1024)} MB budget`,
+        );
+        return null;
+      }
+      return read.embeddings.size > 0 ? read.embeddings : null;
+    } catch (err) {
+      console.error(`[codesift] ${activePath}: ${err instanceof Error ? err.message : String(err)} — not using it`);
+      return null;
+    }
+  }
   return loadNdjsonMap<string, Float32Array>(
     activePath,
     isChunkEmbeddingLine,
@@ -444,6 +469,15 @@ export async function loadChunkVectorsForReuse(
   const hashes = new Map<string, number>();
   const rebase = manifest?.id_rebase;
   const activePath = manifest ? join(dirname(path), manifest.embeddings) : path;
+  if (await isVectorFile(activePath)) {
+    try {
+      const read = await readVectorFile(activePath, { rebase: rebase ?? null });
+      return { vectors: read.embeddings, hashes: read.hashes };
+    } catch (err) {
+      console.error(`[codesift] ${activePath}: ${err instanceof Error ? err.message : String(err)} — not reusing it`);
+      return { vectors: new Map(), hashes };
+    }
+  }
   const vectors = await loadNdjsonMap<string, Float32Array>(
     activePath,
     isChunkEmbeddingLine,

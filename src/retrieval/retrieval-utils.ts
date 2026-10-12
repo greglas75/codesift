@@ -27,7 +27,9 @@ export function filterEmbeddingsByFile(
   fileFilter: string | undefined,
   excludeTests: boolean,
 ): Map<string, Float32Array> {
-  if (!fileFilter && !excludeTests) return embeddings;
+  // Always filtered, even with no filter asked for: a vector whose id is not in the lookup belongs to
+  // a symbol or chunk deleted since the embedding run, and ranking it took a result slot that the
+  // caller then dropped (fewer than topK results).
   return new Map([...embeddings.entries()].filter(([id]) => {
     const file = fileLookup.get(id);
     if (!file) return false;

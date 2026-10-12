@@ -65,8 +65,14 @@ describe("streamed chunk writers", () => {
   it("rejects an embedding write error while waiting for backpressure", async () => {
     const { saveChunkEmbeddings } = await import("../../src/storage/chunk-store.js");
     const embeddings = new Map([["chunk-1", new Float32Array([0.1, 0.2])]]);
-    await expectDiskFailureWithoutHanging(
-      saveChunkEmbeddings(join(dir, "chunk-embeddings.ndjson"), embeddings),
-    );
+    // The ndjson writer: the rollback format (vector files go through a FileHandle, not a stream).
+    process.env["CODESIFT_VECTOR_FORMAT"] = "ndjson";
+    try {
+      await expectDiskFailureWithoutHanging(
+        saveChunkEmbeddings(join(dir, "chunk-embeddings.ndjson"), embeddings),
+      );
+    } finally {
+      delete process.env["CODESIFT_VECTOR_FORMAT"];
+    }
   });
 });

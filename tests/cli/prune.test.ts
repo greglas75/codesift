@@ -244,7 +244,8 @@ describe("codesift prune", () => {
   it("reclaims a live repo's ndjson vectors once a .vec replaces them", async () => {
     const vec = join(dir, `${LIVE}.embeddings.vec`);
     const ndjson = join(dir, `${LIVE}.embeddings.ndjson`);
-    writeFileSync(vec, "v");
+    const { writeVectorFile } = await import("../../src/storage/vector-file.js");
+    await writeVectorFile(vec, new Map([["a", new Float32Array([1, 2])]]));
     const old = new Date(Date.now() - 30 * 60 * 1000);
     utimesSync(ndjson, old, old);
 
@@ -252,6 +253,20 @@ describe("codesift prune", () => {
     expect(existsSync(ndjson)).toBe(false);
     expect(existsSync(vec)).toBe(true);
     expect(JSON.parse(stdout).vectors_superseded_ndjson).toBe(1);
+  });
+
+  // Bug it catches: the ndjson deleted behind a damaged .vec — the loader skips the .vec and falls
+  // back to that ndjson, so it was the only readable copy of the vectors.
+  it("keeps the ndjson behind a .vec that does not verify", async () => {
+    const vec = join(dir, `${LIVE}.embeddings.vec`);
+    const ndjson = join(dir, `${LIVE}.embeddings.ndjson`);
+    writeFileSync(vec, "not a vector file");
+    const old = new Date(Date.now() - 30 * 60 * 1000);
+    utimesSync(ndjson, old, old);
+
+    await COMMAND_MAP["prune"]!([], { json: true });
+    expect(existsSync(ndjson)).toBe(true);
+    expect(JSON.parse(stdout).vectors_superseded_ndjson).toBe(0);
   });
 
   it("keeps a live repo's ndjson vectors when there is no .vec", async () => {

@@ -1191,20 +1191,16 @@ impl NativeVectors {
             .footprint_bytes() as f64)
     }
 
-    /// The file of every symbol in the index, as two parallel arrays; replaces the previous set.
+    /// The file of every symbol in the index — ids and files each joined with NUL, in the same order;
+    /// replaces the previous set. Two strings rather than two arrays: converting 478k strings one by
+    /// one held the main thread 425 ms on rdesigner; the split and the map are built off it.
     #[napi]
-    pub fn attach_files(&self, ids: Vec<String>, files: Vec<String>) -> napi::Result<()> {
-        if ids.len() != files.len() {
-            return Err(napi::Error::new(
-                Status::InvalidArg,
-                "ids and files differ in length",
-            ));
-        }
-        self.inner
-            .write()
-            .map_err(|_| vectors_poisoned())?
-            .attach_files(&ids, &files);
-        Ok(())
+    pub fn attach_files_async(&self, ids: String, files: String) -> AsyncTask<AttachFilesTask> {
+        AsyncTask::new(AttachFilesTask {
+            inner: Arc::clone(&self.inner),
+            ids,
+            files,
+        })
     }
 
     /// Top `topK` vectors by cosine to `query`, among attached files passing the filter, scored off
@@ -1226,11 +1222,112 @@ impl NativeVectors {
         })
     }
 
+    /// `computeRRFScores` over `queries`, then `extraIds`/`extraScores` added in order (a hybrid query's
+    /// text matches), top `topK` — off the main thread.
+    #[napi]
+    pub fn search_rrf_async(
+        &self,
+        queries: Vec<napi::bindgen_prelude::Float32Array>,
+        top_k: u32,
+        contains: Option<String>,
+        exclude_tests: bool,
+        extra_ids: Vec<String>,
+        extra_scores: Vec<f64>,
+    ) -> napi::Result<AsyncTask<SearchRrfTask>> {
+        if extra_ids.len() != extra_scores.len() {
+            return Err(napi::Error::new(
+                Status::InvalidArg,
+                "extraIds and extraScores differ in length",
+            ));
+        }
+        Ok(AsyncTask::new(SearchRrfTask {
+            inner: Arc::clone(&self.inner),
+            queries: queries.iter().map(|q| q.to_vec()).collect(),
+            top_k: top_k as usize,
+            contains,
+            exclude_tests,
+            extra: extra_ids.into_iter().zip(extra_scores).collect(),
+        }))
+    }
+
     /// Free the vectors' Rust memory now (V8 cannot see it). The handle answers as empty afterwards.
     #[napi]
     pub fn release(&self) -> napi::Result<()> {
         *self.inner.write().map_err(|_| vectors_poisoned())? = vectors::Vectors::default();
         Ok(())
+    }
+}
+
+pub struct AttachFilesTask {
+    inner: Arc<RwLock<vectors::Vectors>>,
+    ids: String,
+    files: String,
+}
+
+impl Task for AttachFilesTask {
+    type Output = ();
+    type JsValue = ();
+
+    fn compute(&mut self) -> napi::Result<()> {
+        let split = |s: &str| -> Vec<String> {
+            if s.is_empty() {
+                Vec::new()
+            } else {
+                s.split('\0').map(str::to_string).collect()
+            }
+        };
+        let (ids, files) = (split(&self.ids), split(&self.files));
+        if ids.len() != files.len() {
+            return Err(napi::Error::new(
+                Status::InvalidArg,
+                "ids and files differ in length",
+            ));
+        }
+        self.inner
+            .write()
+            .map_err(|_| vectors_poisoned())?
+            .attach_files(&ids, &files);
+        Ok(())
+    }
+
+    fn resolve(&mut self, _env: Env, _out: ()) -> napi::Result<()> {
+        Ok(())
+    }
+}
+
+pub struct SearchRrfTask {
+    inner: Arc<RwLock<vectors::Vectors>>,
+    queries: Vec<Vec<f32>>,
+    top_k: usize,
+    contains: Option<String>,
+    exclude_tests: bool,
+    extra: Vec<(String, f64)>,
+}
+
+impl Task for SearchRrfTask {
+    type Output = Vec<vectors::Hit>;
+    type JsValue = Vec<VectorHitJs>;
+
+    fn compute(&mut self) -> napi::Result<Vec<vectors::Hit>> {
+        let v = self.inner.read().map_err(|_| vectors_poisoned())?;
+        v.search_rrf(
+            &self.queries,
+            self.top_k,
+            self.contains.as_deref(),
+            self.exclude_tests,
+            &self.extra,
+        )
+        .map_err(|e| napi::Error::new(Status::InvalidArg, e))
+    }
+
+    fn resolve(&mut self, _env: Env, hits: Vec<vectors::Hit>) -> napi::Result<Vec<VectorHitJs>> {
+        Ok(hits
+            .into_iter()
+            .map(|h| VectorHitJs {
+                id: h.id,
+                score: h.score,
+            })
+            .collect())
     }
 }
 

@@ -31,9 +31,11 @@ interface SemanticContext {
   vecs: number[][];
   repoMeta: { index_path: string } | null;
   chunks: Map<string, CodeChunk> | null;
-  chunkEmbeddings: Map<string, Float32Array> | null;
+  /** The published chunk vector file, when the repo has chunks. */
+  chunkVectorPath: string | undefined;
+  /** The chunk vectors as a TypeScript map — loaded only when the native set cannot answer. */
+  loadChunkEmbeddings: () => Promise<Map<string, Float32Array> | null>;
   chunkFileLookup: Map<string, string | undefined>;
-  filteredEmbeddings: Map<string, Float32Array>;
   topK: number;
   fileFilter: string | undefined;
   excludeTests: boolean;
@@ -67,7 +69,8 @@ async function loadSemanticContext(
 
   const repoMeta = await getRepo(config.registryPath, repo);
   let chunks: Map<string, CodeChunk> | null = null;
-  let chunkEmbeddings: Map<string, Float32Array> | null = null;
+  let chunkVectorPath: string | undefined;
+  let loadChunkEmbeddings = async (): Promise<Map<string, Float32Array> | null> => null;
 
   if (repoMeta) {
     // Chunk embeddings come from the cache, not a fresh parse. This call used to re-read and
@@ -80,24 +83,78 @@ async function loadSemanticContext(
       chunkPath,
       getChunkEmbeddingPath(repoMeta.index_path),
     );
-    [chunks, chunkEmbeddings] = await Promise.all([
-      loadChunks(chunkPath, activePaths.chunks),
-      getChunkEmbeddingCache(repo, activePaths.embeddings),
-    ]);
+    chunkVectorPath = activePaths.embeddings;
+    let cached: Promise<Map<string, Float32Array> | null> | undefined;
+    loadChunkEmbeddings = () => (cached ??= getChunkEmbeddingCache(repo, activePaths.embeddings));
+    chunks = await loadChunks(chunkPath, activePaths.chunks);
   }
 
   const chunkFileLookup = chunks
     ? new Map([...chunks.entries()].map(([id, c]) => [id, c.file]))
     : new Map<string, string | undefined>();
 
-  const sourceEmbeddings = chunkEmbeddings ?? new Map<string, Float32Array>();
-  const filteredEmbeddings = filterEmbeddingsByFile(sourceEmbeddings, chunkFileLookup, fileFilter, excludeTests);
-
   return {
     config, provider, vecs, repoMeta,
-    chunks, chunkEmbeddings, chunkFileLookup, filteredEmbeddings,
+    chunks, chunkVectorPath, loadChunkEmbeddings, chunkFileLookup,
     topK, fileFilter, excludeTests, cosineSimilarity,
   };
+}
+
+/** Whether the stored vectors were made by the active model (a missing meta is not a mismatch). */
+async function storedModelMatches(ctx: SemanticContext): Promise<boolean> {
+  if (!ctx.repoMeta || !ctx.config.embeddingProvider) return true;
+  const { getEmbeddingMetaPath, loadEmbeddingMeta } = await import("../storage/embedding-store.js");
+  const { expectedEmbeddingModel } = await import("../search/semantic.js");
+  const meta = await loadEmbeddingMeta(getEmbeddingMetaPath(ctx.repoMeta.index_path));
+  if (!meta) return true;
+  return meta.model === expectedEmbeddingModel(ctx.config.embeddingProvider, ctx.config.localModel, ctx.config.ollamaModel);
+}
+
+/**
+ * The chunk ranking — `computeRRFScores` over the sub-query vectors, then `extra` (a hybrid query's
+ * text matches) added in order, then the stable top-K cut — from the native set when it can answer,
+ * else from the TypeScript map. `dims` is the stored width; null when the repo has no usable chunk
+ * vectors (the caller falls back to symbol-level search).
+ */
+async function rankChunks(
+  repo: string,
+  ctx: SemanticContext,
+  extra: ReadonlyArray<readonly [string, number]>,
+): Promise<{ ids: string[]; dims: number } | null> {
+  if (!ctx.chunks) return null;
+  const queries = ctx.vecs.filter((v): v is number[] => Boolean(v)).map((v) => new Float32Array(v));
+  const { localEmbeddingsDisabled } = await import("../config.js");
+  if (ctx.chunkVectorPath && !localEmbeddingsDisabled() && (await storedModelMatches(ctx))) {
+    const { rankNativeRrf, chunkSetKey } = await import("../search/native-vectors.js");
+    const chunks = ctx.chunks;
+    const native = await rankNativeRrf({
+      set: chunkSetKey(repo),
+      vectorPath: ctx.chunkVectorPath,
+      // The query reads chunks and vectors of one generation, which share their ids even in a clone.
+      rebase: null,
+      listFiles: async () => ({ ids: [...chunks.keys()], files: [...chunks.values()].map((c) => c.file) }),
+      queries,
+      topK: ctx.topK,
+      contains: ctx.fileFilter,
+      excludeTests: ctx.excludeTests,
+      extra,
+    });
+    if (native) return native;
+  }
+
+  const embeddings = await ctx.loadChunkEmbeddings();
+  if (!embeddings) return null;
+  const { detectDimensionMismatch } = await import("../search/semantic.js");
+  const queryDim = queries[0]?.length ?? 0;
+  const dims = (queryDim > 0 ? detectDimensionMismatch(queryDim, embeddings)?.storedDim : undefined) ?? queryDim;
+  const filtered = filterEmbeddingsByFile(embeddings, ctx.chunkFileLookup, ctx.fileFilter, ctx.excludeTests);
+  const rrfScores = computeRRFScores(ctx.vecs, filtered, ctx.cosineSimilarity);
+  for (const [id, score] of extra) rrfScores.set(id, (rrfScores.get(id) ?? 0) + score);
+  const ids = [...rrfScores.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, ctx.topK)
+    .map(([id]) => id);
+  return { ids, dims };
 }
 
 /**
@@ -112,17 +169,11 @@ async function nativeSymbolSearch(
   if (!ctx.repoMeta) return null;
   const { localEmbeddingsDisabled } = await import("../config.js");
   if (localEmbeddingsDisabled()) return null;
-  const { getEmbeddingPath, getEmbeddingMetaPath, loadEmbeddingMeta, idRebaseFor, currentEmbeddingFile } =
-    await import("../storage/embedding-store.js");
-  const { expectedEmbeddingModel } = await import("../search/semantic.js");
-  const indexPath = ctx.repoMeta.index_path;
   // Vectors of another model are incomparable: the TypeScript path refuses them with the message that
   // says so, so leave it to that path.
-  const meta = await loadEmbeddingMeta(getEmbeddingMetaPath(indexPath));
-  if (meta && ctx.config.embeddingProvider) {
-    const want = expectedEmbeddingModel(ctx.config.embeddingProvider, ctx.config.localModel, ctx.config.ollamaModel);
-    if (meta.model !== want) return null;
-  }
+  if (!(await storedModelMatches(ctx))) return null;
+  const { getEmbeddingPath, idRebaseFor, currentEmbeddingFile } = await import("../storage/embedding-store.js");
+  const indexPath = ctx.repoMeta.index_path;
   const embeddingPath = getEmbeddingPath(indexPath);
   const vectorPath = currentEmbeddingFile(embeddingPath);
   if (!vectorPath) return null;
@@ -130,13 +181,19 @@ async function nativeSymbolSearch(
   const { searchNativeVectors } = await import("../search/native-vectors.js");
   const { findRepoSymbols } = await import("../tools/index-tools.js");
   return searchNativeVectors({
-    repo,
+    set: repo,
     vectorPath,
     // Keyed by the ndjson name, whichever file holds the vectors: it locates the meta.
     rebase: idRebaseFor(embeddingPath, (p) => readFileSync(p, "utf-8")),
     listFiles: async () => {
       const symbols = await findRepoSymbols(repo, { withSource: false }, { skipFreshness: true });
       return { ids: symbols.map((s) => s.id), files: symbols.map((s) => s.file) };
+    },
+    filesVersion: async () => {
+      const { resolveIndexBackend, sqlitePathFor } = await import("../storage/index-migration.js");
+      if ((await resolveIndexBackend()) !== "sqlite") return 0;
+      const { getDataVersion } = await import("../storage/sqlite/accessors.js");
+      return getDataVersion(sqlitePathFor(indexPath));
     },
     query,
     topK: ctx.topK,
@@ -159,17 +216,13 @@ export async function handleSemanticQuery(
   const queryDim = ctx.vecs[0]?.length ?? 0;
 
   // Chunk-level semantic search (preferred path)
-  if (ctx.chunks && ctx.chunkEmbeddings) {
-    const mismatch = queryDim > 0 ? detectDimensionMismatch(queryDim, ctx.chunkEmbeddings) : null;
-    if (mismatch) {
-      const text = dimensionMismatchMessage(queryDim, mismatch.storedDim);
+  const rankedChunks = ctx.chunks ? await rankChunks(repo, ctx, []) : null;
+  if (ctx.chunks && rankedChunks) {
+    if (queryDim > 0 && rankedChunks.dims !== queryDim) {
+      const text = dimensionMismatchMessage(queryDim, rankedChunks.dims);
       return { type: "semantic", data: text, tokens: estimateTokens(text) };
     }
-    const rrfScores = computeRRFScores(ctx.vecs, ctx.filteredEmbeddings, ctx.cosineSimilarity);
-    const topIds = [...rrfScores.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, ctx.topK)
-      .map(([id]) => id);
+    const topIds = rankedChunks.ids;
 
     let finalIds = topIds;
     if (query.rerank) {
@@ -267,13 +320,11 @@ export async function handleHybridQuery(
     searchText(repo, query.query, { file_pattern: query.file_filter }).catch(() => []),
   ]);
   if (!ctx.repoMeta) throw new Error(`Repository "${repo}" not found`);
-  if (!ctx.chunks || !ctx.chunkEmbeddings) throw new Error(`No chunk index for "${repo}"`);
+  if (!ctx.chunks) throw new Error(`No chunk index for "${repo}"`);
 
-
-  // 1. Semantic RRF contributions
-  const rrfScores = computeRRFScores(ctx.vecs, ctx.filteredEmbeddings, ctx.cosineSimilarity);
-
-  // 2. Text match RRF contributions — map match line -> covering chunk
+  // Text match RRF contributions — map match line -> covering chunk. Added after the semantic fusion,
+  // in match order (rankChunks), which is the order the scores accumulate in.
+  const extra: Array<[string, number]> = [];
   const fileToChunks = new Map<string, Array<{ id: string; startLine: number; endLine: number }>>();
   for (const [id, chunk] of ctx.chunks) {
     const list = fileToChunks.get(chunk.file) ?? [];
@@ -299,16 +350,15 @@ export async function handleHybridQuery(
       } else if (chunk.startLine > match.line) {
         hi = mid - 1;
       } else {
-        rrfScores.set(chunk.id, (rrfScores.get(chunk.id) ?? 0) + 1 / (RRF_K + rank + 1));
+        extra.push([chunk.id, 1 / (RRF_K + rank + 1)]);
         break;
       }
     }
   }
 
-  let topIds = [...rrfScores.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, ctx.topK)
-    .map(([id]) => id);
+  const ranked = await rankChunks(repo, ctx, extra);
+  if (!ranked) throw new Error(`No chunk index for "${repo}"`);
+  let topIds = ranked.ids;
 
   if (query.rerank) {
     const { rerankChunkIds } = await import("../search/reranker.js");

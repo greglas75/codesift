@@ -70,9 +70,15 @@ describe("chunk-store stream errors during backpressure", () => {
   });
 
   it("rejects saveChunkEmbeddings instead of waiting forever for drain", async () => {
-    await expectWriteFailure(saveChunkEmbeddings(
-      join(dir, "chunk-embeddings.ndjson"),
-      new Map([["chunk-1", new Float32Array([1, 2, 3])]]),
-    ));
+    // The ndjson writer: the rollback format (vector files go through a FileHandle, not a stream).
+    process.env["CODESIFT_VECTOR_FORMAT"] = "ndjson";
+    try {
+      await expectWriteFailure(saveChunkEmbeddings(
+        join(dir, "chunk-embeddings.ndjson"),
+        new Map([["chunk-1", new Float32Array([1, 2, 3])]]),
+      ));
+    } finally {
+      delete process.env["CODESIFT_VECTOR_FORMAT"];
+    }
   });
 });

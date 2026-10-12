@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadEmbeddings, contentHashesForPath, saveEmbeddings } from "../../src/storage/embedding-store.js";
 import { cloneChunksFromNearestDonor, cloneVectorsFromNearestDonor, seedEmbeddingsFromDonor } from "../../src/tools/index-tools/worktree-seed-embeddings.js";
-import { loadChunkManifest, loadChunkVectorsForReuse } from "../../src/storage/chunk-store.js";
+import { loadChunkManifest, loadChunkVectorsForReuse, saveChunkEmbeddings } from "../../src/storage/chunk-store.js";
+import { isVectorFile } from "../../src/storage/vector-file.js";
 
 let dir: string;
 const DONOR = "local/repo";
@@ -230,13 +231,20 @@ describe("cloneVectorsFromNearestDonor", () => {
     expect(readFileSync(partial, "utf-8")).toBe(JSON.stringify({ model: "embeddinggemma" }) + "\n");
   });
 
-  // Bug: the chunk pass had no clone, so every worktree embedded every chunk from scratch.
-  it("clones a sibling's published chunk generation, ids rebased for reuse", async () => {
+  // Bug: the chunk pass had no clone, so every worktree embedded every chunk from scratch. A donor's
+  // generation may be ndjson (older) or a vector file under the same name; both must clone and reuse.
+  it.each(["ndjson", "vector file"])("clones a sibling's published chunk generation (%s), ids rebased for reuse", async (format) => {
     register(git(["rev-parse", "HEAD"]));
     writeFileSync(join(dir, "donor.chunks.ndjson.generation.g"), JSON.stringify({
       id: `${DONOR}:a.ts:1`, file: "a.ts", startLine: 1, endLine: 1, text: "a", tokenCount: 1,
     }) + "\n");
-    writeFileSync(join(dir, "donor.chunk-embeddings.ndjson.generation.g"), JSON.stringify({ id: `${DONOR}:a.ts:1`, vec: [1, 0], h: 5 }) + "\n");
+    const generation = join(dir, "donor.chunk-embeddings.ndjson.generation.g");
+    if (format === "ndjson") {
+      writeFileSync(generation, JSON.stringify({ id: `${DONOR}:a.ts:1`, vec: [1, 0], h: 5 }) + "\n");
+    } else {
+      await saveChunkEmbeddings(generation, new Map([[`${DONOR}:a.ts:1`, new Float32Array([1, 0])]]), new Map([[`${DONOR}:a.ts:1`, 5]]));
+      expect(await isVectorFile(generation)).toBe(true);
+    }
     writeFileSync(join(dir, "donor.chunk-index.json"), JSON.stringify({
       version: 1, chunks: "donor.chunks.ndjson.generation.g", embeddings: "donor.chunk-embeddings.ndjson.generation.g", model: "m",
     }));

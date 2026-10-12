@@ -66,6 +66,14 @@ describe("filterEmbeddingsByFile", () => {
     expect(result.size).toBe(1);
     expect(result.has("chunk-1")).toBe(true);
   });
+
+  // Bug it catches: with no filter asked for, a vector of a deleted chunk was ranked and took a slot
+  // the formatter then dropped, so the answer had fewer than topK results.
+  it("drops entries with no file in lookup even when no filter is active", () => {
+    const embeddings = new Map([...makeEmbeddings(), ["gone", new Float32Array([1, 0])]]);
+    const result = filterEmbeddingsByFile(embeddings, fileLookup, undefined, false);
+    expect([...result.keys()]).toEqual(["chunk-1", "chunk-2", "chunk-3"]);
+  });
 });
 
 // ---------------------------------------------------------------------------

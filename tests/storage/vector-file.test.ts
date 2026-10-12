@@ -1,6 +1,6 @@
 // The binary vector file (ADR-006 stage 11 E2): 5.3x smaller than the ndjson it replaces, read without
 // parsing, checksummed — and the TypeScript reader must hand the loader exactly what the ndjson did.
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -50,6 +50,13 @@ describe("saveEmbeddings / loadEmbeddings over the vector file", () => {
     expect((await loadEmbeddings(ndjson)).size).toBe(0);
   });
 
+  it("falls back to the ndjson beside a damaged .vec", async () => {
+    await saveEmbeddings(ndjson, sample(), hashes);
+    writeFileSync(vec, "damaged");
+    writeFileSync(ndjson, JSON.stringify({ id: "r:old.ts:o:1", vec: [1, 2, 3] }) + "\n");
+    expect([...(await loadEmbeddings(ndjson)).keys()]).toEqual(["r:old.ts:o:1"]);
+  });
+
   it("loads nothing above the budget, judged from the header before reading the matrix", async () => {
     await saveEmbeddings(ndjson, sample(), hashes);
     expect((await loadEmbeddings(ndjson, 100)).size).toBe(0);
@@ -67,12 +74,23 @@ describe("saveEmbeddings / loadEmbeddings over the vector file", () => {
   });
 });
 
+describe("a rollback save beside a .vec it cannot remove", () => {
+  // Bug it catches: the ndjson was published first and the failed removal swallowed, so the old .vec
+  // went on winning every read while the save reported success.
+  it("fails the save and does not publish the ndjson", async () => {
+    process.env["CODESIFT_VECTOR_FORMAT"] = "ndjson";
+    mkdirSync(join(vec, "pinned"), { recursive: true }); // unlink of a directory fails (EISDIR / EPERM)
+    await expect(saveEmbeddings(ndjson, sample())).rejects.toThrow();
+    expect(existsSync(ndjson)).toBe(false);
+  });
+});
+
 describe.skipIf(!getNativeCore("vectors"))("the native reader", () => {
   it("reads the TypeScript writer's file as the TypeScript reader does", async () => {
     await saveEmbeddings(ndjson, sample(), hashes);
     const native = await getNativeCore("vectors")!.loadVectors(vec, null, null);
     expect(native.count).toBe(3);
-    native.attachFiles([...sample().keys()], ["src/a.ts", "src/ü.ts", "src/c.ts"]);
+    await native.attachFilesAsync([...sample().keys()].join("\0"), ["src/a.ts", "src/ü.ts", "src/c.ts"].join("\0"));
     const hits = await native.searchAsync(new Float32Array([7, 8, 9]), 1, null, false);
     expect(hits[0]!.id).toBe("r:src/c.ts:c:3");
     native.release();

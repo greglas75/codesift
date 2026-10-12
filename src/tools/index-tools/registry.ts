@@ -19,6 +19,7 @@ import { loadBM25Index, saveBM25Index } from "../../search/bm25-store.js";
 import { loadPersistedNativeBM25, saveNativeBM25 } from "../../search/bm25-native-store.js";
 import { storeBackedBM25 } from "./store-backed-bm25.js";
 import { getNativeCore } from "../../native/index.js";
+import { dropNativeVectors } from "../../search/native-vectors.js";
 import { findSymbols, streamSymbols } from "../../storage/index-store.js";
 import type { SymbolQuery } from "../../storage/sqlite/queries.js";
 import { withIndexLoadSlot } from "./load-gate.js";
@@ -96,6 +97,8 @@ export async function invalidateCache(repoName: string): Promise<boolean> {
   bm25Indexes.delete(repoName);
   codeIndexes.delete(repoName);
   invalidateEmbeddingCaches(repoName);
+  // Its vectors live in Rust memory, which no V8 cache bound can see; free them with the files.
+  dropNativeVectors(repoName);
 
   // Delete index file + embedding files + chunk files
   const embeddingPath = getEmbeddingPath(meta.index_path);

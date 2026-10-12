@@ -1,7 +1,7 @@
 ## Tech Stack
 TypeScript | Vitest | tree-sitter | BM25F + semantic search | LSP bridge | Rust core via napi-rs (ADR-006, optional)
 
-## Rust core (ADR-006 — stages 0–7 and 9 done, store on by default since 2026-10-10; 8, 10 no-go)
+## Rust core (ADR-006 — stages 0–7, 9 and 11 done, store on by default since 2026-10-10; 8, 10 no-go)
 
 Storage, BM25 and parsing are moving into `crates/codesift-core` (plain Rust) behind
 `crates/codesift-napi` (thin `#[napi]` layer). The MCP layer and the tools stay TypeScript. Every
@@ -56,6 +56,14 @@ component keeps its TS implementation; the binary is OPTIONAL.
   in parallel off the main thread; path resolution stays in TS. A file the core gives up on is absent
   from the result and takes the web-tree-sitter path — never "no imports". Parity:
   `scripts/native-imports-parity.ts <copy.db>` (per file + whole graph; 0 diffs on 73k files).
+- **Stage 11 (vectors):** `vectors.rs` holds a repo's symbol and chunk vectors as one `f32` matrix and
+  ranks them bit-identically to `searchSemantic` / `computeRRFScores` (f64 parse then cast, f64 cosine,
+  stable sort, Map semantics). Files: `<hash>.embeddings.vec` (CRC-32 trailer), which ALWAYS wins over
+  the ndjson. Each writer removes the other kind; a stale `.vec` goes before an ndjson is published.
+  Rollback: `CODESIFT_VECTOR_FORMAT=ndjson`. The daemon cache is `search/native-vectors.ts`, keyed by
+  path + mtime + size. Files are re-attached on in-process invalidation and on a `data_version` move.
+  Parity: `scripts/native-vectors-parity.ts <.vec|.ndjson> <index.db copy>` (0 diffs on rdesigner,
+  463k vectors; query 650 → 50 ms, load 51.8 → 1.2 s).
 - **Distribution:** `@codesift/core-<tag>` per platform, templates in `npm/`, built by the `native`
   matrix in `release.yml`, published by `scripts/publish-native-packages.mjs` BEFORE the main package,
   which then gets `optionalDependencies` for the platforms that made it (never committed). One-time

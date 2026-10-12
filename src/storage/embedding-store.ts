@@ -3,7 +3,7 @@ import { readFile, unlink } from "node:fs/promises";
 import type { EmbeddingMeta } from "../types.js";
 import { loadSharedCache, appendSharedCache, contentKey } from "./shared-embedding-cache.js";
 import { atomicWriteFile, cleanupOrphanTempFiles } from "./_shared.js";
-import { readVectorFile, VectorFileError, writeVectorFile } from "./vector-file.js";
+import { readVectorFile, shouldWriteVectorFile, VectorFileError, writeVectorFile } from "./vector-file.js";
 
 /**
  * Get the embedding file path from an index path.
@@ -39,11 +39,6 @@ export function currentEmbeddingFile(embeddingPath: string): string | null {
 /** Whether the repo has a vector file of either kind. */
 export function embeddingFileExists(embeddingPath: string): boolean {
   return currentEmbeddingFile(embeddingPath) !== null;
-}
-
-/** `CODESIFT_VECTOR_FORMAT=ndjson` writes the old format (and removes the `.vec`): the rollback. */
-function writesVectorFiles(): boolean {
-  return process.env["CODESIFT_VECTOR_FORMAT"] !== "ndjson";
 }
 
 /**
@@ -166,9 +161,11 @@ export async function loadEmbeddings(
       for (const [id, h] of read.hashes) hashes.set(id, h);
       return read.embeddings;
     } catch (err) {
+      // A damaged `.vec` is not read; the ndjson it replaced, if one is still there, is the next best
+      // copy (`prune` deletes that ndjson only behind a `.vec` that verifies).
       const message = err instanceof VectorFileError || err instanceof Error ? err.message : String(err);
       console.error(`[codesift] ${vecPath}: ${message} — not using it`);
-      return embeddings;
+      if (!existsSync(embeddingPath)) return embeddings;
     }
   }
 
@@ -259,6 +256,15 @@ export async function loadEmbeddings(
   return embeddings;
 }
 
+/** Remove a file; one that is already gone is fine, any other failure is the caller's. */
+export async function unlinkIfPresent(path: string): Promise<void> {
+  try {
+    await unlink(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+}
+
 /**
  * Save all embeddings to an ndjson file using streaming writes.
  * Avoids building a single huge string (30K+ symbols × 1536 floats = >300MB).
@@ -269,13 +275,7 @@ export async function saveEmbeddings(
   hashes?: ReadonlyMap<string, number>,
 ): Promise<void> {
   const vecPath = vectorFilePathFor(embeddingPath);
-  let uniform = true;
-  let width = -1;
-  for (const vec of embeddings.values()) {
-    if (width === -1) width = vec.length;
-    else if (vec.length !== width) { uniform = false; break; }
-  }
-  if (vecPath && writesVectorFiles() && uniform) {
+  if (vecPath && shouldWriteVectorFile(embeddings)) {
     await cleanupOrphanTempFiles(vecPath);
     // Halves of ndjson writes from before the switch, too: nothing else will ever sweep them.
     await cleanupOrphanTempFiles(embeddingPath);
@@ -314,11 +314,13 @@ export async function saveEmbeddings(
     await new Promise<void>((resolve, reject) => {
       stream.end(() => streamError ? reject(streamError) : resolve());
     });
+    // A `.vec` beside it would win every read (rollback mode, or vectors of mixed widths), so it goes
+    // BEFORE the rename: a crash in between then leaves no vectors (re-embedded) rather than the old
+    // ones served as current forever, and a removal that fails fails the save.
+    if (vecPath) await unlinkIfPresent(vecPath);
     // Atomic rename
     const { rename } = await import("node:fs/promises");
     await rename(tmpPath, embeddingPath);
-    // A `.vec` beside it would win every read (rollback mode, or vectors of mixed widths).
-    if (vecPath) await unlink(vecPath).catch(() => undefined);
   } catch (err) {
     // Clean up temp file on error
     try { const { unlink } = await import("node:fs/promises"); await unlink(tmpPath); } catch { /* ignore */ }

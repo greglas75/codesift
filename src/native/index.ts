@@ -19,7 +19,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Must equal `codesift_core::ABI_VERSION`. See the comment there for why a mismatch refuses. */
-export const NATIVE_ABI = 24;
+export const NATIVE_ABI = 26;
 
 /** `SymbolQuery` from storage/sqlite/queries.ts, as the binding receives it. */
 export interface NativeSymbolQuery {
@@ -182,12 +182,23 @@ export interface NativeVectorsHandle {
   /** Lines skipped on load: `[other width, malformed]`. */
   skipped(): number[];
   footprintBytes(): number;
-  /** The file of every symbol in the index (parallel arrays); replaces the previous set. Ids not
-   *  listed — symbols deleted since the embedding run — stop being candidates. */
-  attachFiles(ids: string[], files: string[]): void;
+  /** The file of every symbol in the index, ids and files each joined with "\0" in the same order;
+   *  replaces the previous set, off the main thread. Ids not listed — symbols deleted since the
+   *  embedding run — stop being candidates. */
+  attachFilesAsync(ids: string, files: string): Promise<void>;
   /** `searchSemantic` over attached files passing the filter (`file` contains `contains`; not a test
    *  file when `excludeTests`), off the main thread. Rejects before `attachFiles`. */
   searchAsync(query: Float32Array, topK: number, contains: string | null, excludeTests: boolean): Promise<NativeVectorHit[]>;
+  /** `computeRRFScores` over `queries`, then the extras added in order (a hybrid query's text
+   *  matches; an id without a vector ranks after every candidate on ties), top `topK`. */
+  searchRrfAsync(
+    queries: Float32Array[],
+    topK: number,
+    contains: string | null,
+    excludeTests: boolean,
+    extraIds: string[],
+    extraScores: number[],
+  ): Promise<NativeVectorHit[]>;
   /** Free the Rust memory now; the handle answers as empty afterwards. */
   release(): void;
 }

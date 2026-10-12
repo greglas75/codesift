@@ -4,8 +4,8 @@
  *
  *   node --max-old-space-size=12288 --import tsx scripts/native-vectors-parity.ts <embeddings.ndjson|.vec> <index.db copy> [--queries N] [--seed S]
  *
- * Loads the file both ways (the id rewrite in its meta applied by both), checks every vector bit for
- * bit and the id order, then ranks a query set — stored vectors with seeded noise — through
+ * Loads the file both ways (the id rewrite in its meta applied by both), compares the counts (the
+ * vectors themselves are compared through the rankings: a differing bit moves a score), then ranks a query set — stored vectors with seeded noise — through
  * `filterEmbeddingsByFile` + `searchSemantic` and through the native `search`, without a filter,
  * without tests, and restricted to a directory. Compared per result: the same id in the same position
  * and the same score bits.
@@ -84,8 +84,19 @@ async function main(): Promise<void> {
     diffs++;
   }
 
-  native.attachFiles([...fileOf.keys()], [...fileOf.values()]);
-  const ids = [...ts.keys()];
+  t = performance.now();
+  const idsJoined = [...fileOf.keys()].join("\0");
+  const filesJoined = [...fileOf.values()].join("\0");
+  const joinMs = Math.round(performance.now() - t);
+  t = performance.now();
+  await native.attachFilesAsync(idsJoined, filesJoined);
+  console.log(`attachFiles: join ${joinMs} ms on the main thread, attach ${Math.round(performance.now() - t)} ms off it, ${fileOf.size} symbols`);
+  const ids = [...ts.keys()].filter((id) => fileOf.has(id));
+  if (ids.length === 0) {
+    // Nothing to compare would read as "0 diffs".
+    console.error("no vector id is in the index copy — wrong pair of files?");
+    process.exit(2);
+  }
   const filters: Array<[string | undefined, boolean]> = [[undefined, false], [undefined, true], ["src/", true]];
   let tsSearchMs = 0;
   let nativeSearchMs = 0;

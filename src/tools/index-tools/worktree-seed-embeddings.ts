@@ -42,6 +42,7 @@ import {
   getEmbeddingPath,
   loadEmbeddingMeta,
   saveEmbeddingMeta,
+  unlinkIfPresent,
   vectorFilePathFor,
 } from "../../storage/embedding-store.js";
 
@@ -88,14 +89,16 @@ export async function seedEmbeddingsFromDonor(
   if (!donorMeta || donorMeta.symbol_count <= 0) return { seeded: false, reason: "donor has no vectors" };
 
   // The clone keeps the donor's format (`.vec` or ndjson), and the target's file of the OTHER kind is
-  // removed once the clone is in place: `currentEmbeddingFile` prefers a `.vec`, so a stale one left
-  // beside a cloned ndjson would be read instead of it.
+  // removed: `currentEmbeddingFile` prefers a `.vec`, so a stale one beside a cloned ndjson would be
+  // read instead of it.
   const targetNdjson = getEmbeddingPath(targetIndexPath);
   const targetVec = vectorFilePathFor(targetNdjson);
-  const donorIsVec = donorVectors !== getEmbeddingPath(donorIndexPath);
+  const donorIsVec = donorVectors.endsWith(".embeddings.vec");
+  // Binary bytes under the ndjson name would read as no vectors while reporting a seed.
+  if (donorIsVec && !targetVec) return { seeded: false, reason: "target cannot hold a vector file" };
   const targetVectors = donorIsVec && targetVec ? targetVec : targetNdjson;
   const otherKind = targetVectors === targetNdjson ? targetVec : targetNdjson;
-  const tempVectors = `${targetVectors}.seeding.${process.pid}`;
+  const tempVectors = `${targetVectors}.seeding.${process.pid}.${randomUUID()}`;
   try {
     await cloneFile(donorVectors, tempVectors);
   } catch (err) {
@@ -122,8 +125,12 @@ export async function seedEmbeddingsFromDonor(
       id_rebase: { from, to: `${targetName}:` },
     });
     metaWritten = true;
+    // A stale `.vec` goes BEFORE the ndjson clone is published, and a failure to remove it fails the
+    // seed: removed after, a crash or a failed unlink would leave it winning every read under the
+    // donor's meta. A stale ndjson beside a cloned `.vec` is never read, so it can go after.
+    if (otherKind && otherKind === targetVec) await unlinkIfPresent(otherKind);
     await rename(tempVectors, targetVectors);
-    if (otherKind) await unlink(otherKind).catch(() => undefined);
+    if (otherKind && otherKind !== targetVec) await unlink(otherKind).catch(() => undefined);
     return { seeded: true, vectors: donorMeta.symbol_count };
   } catch (err) {
     await unlink(tempVectors).catch(() => undefined);

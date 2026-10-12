@@ -20,7 +20,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufReader, Read};
+use std::io::{self, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::bm25::is_test_file;
@@ -79,6 +79,9 @@ const NO_FILE: u32 = u32::MAX;
 /// Bytes read per round. Bounded so a 7.6 GB file never sits in memory whole; large enough that the
 /// parallel parse of one block keeps every core busy.
 const READ_BLOCK: usize = 64 << 20;
+/// A line is ~16 KB; one this long is not a vector line, and buffering on in search of its end would
+/// hold the whole file.
+const MAX_LINE: usize = 256 << 20;
 
 #[derive(Deserialize)]
 struct Line {
@@ -116,6 +119,9 @@ pub struct Vectors {
     skipped_width: usize,
     /// Lines that did not parse as `{id, vec}` — skipped, as the TS loader skips them.
     skipped_malformed: usize,
+    /// Positions holding a vector of another width: kept in place (a `Map` keeps such an entry, and
+    /// a later line with the same id revives it at that position) but never a candidate.
+    dead: Vec<bool>,
 }
 
 /// One parsed line: id (rebased), vector, content hash.
@@ -157,21 +163,34 @@ fn norm(v: &[f32]) -> f64 {
 }
 
 impl Vectors {
-    /// Either format, told apart by the first bytes: a vector file, else ndjson.
+    /// Either format, told apart by the first bytes: a vector file, else ndjson. One open, so a file
+    /// replaced between the sniff and the read cannot be read as the other format.
     pub fn load(path: &Path, rebase: Option<&Rebase>) -> io::Result<Vectors> {
+        let mut file = File::open(path)?;
         let mut magic = [0u8; 8];
-        let n = File::open(path)?.read(&mut magic)?;
-        if n == magic.len() && magic == VEC_MAGIC {
-            Vectors::load_vec(path, rebase)
+        let mut got = 0;
+        while got < magic.len() {
+            let n = file.read(&mut magic[got..])?;
+            if n == 0 {
+                break;
+            }
+            got += n;
+        }
+        file.seek(SeekFrom::Start(0))?;
+        if got == magic.len() && magic == VEC_MAGIC {
+            Vectors::read_vec(file, rebase)
         } else {
-            Vectors::load_ndjson(path, rebase)
+            Vectors::read_ndjson(file, rebase)
         }
     }
 
     /// Read a vector file. A foreign, truncated or corrupt file is an error — the whole file, since
     /// one checksum cannot say which vector is wrong.
     pub fn load_vec(path: &Path, rebase: Option<&Rebase>) -> io::Result<Vectors> {
-        let file = File::open(path)?;
+        Vectors::read_vec(File::open(path)?, rebase)
+    }
+
+    fn read_vec(file: File, rebase: Option<&Rebase>) -> io::Result<Vectors> {
         let size = file.metadata()?.len() as usize;
         let mut r = Hashed {
             inner: BufReader::with_capacity(READ_BLOCK, file),
@@ -189,7 +208,9 @@ impl Vectors {
         let header: VecHeader =
             serde_json::from_slice(&r.take(header_len)?).map_err(|_| invalid("bad header"))?;
         let (dims, count) = (header.dims, header.count);
-        if count > size {
+        // Every size below is checked against the file before it is allocated or multiplied: a
+        // damaged header must be an error, not an allocation of whatever it claims.
+        if count > size || dims > size {
             return Err(invalid("bad header"));
         }
         let mut ids = Vec::with_capacity(count);
@@ -208,7 +229,11 @@ impl Vectors {
             return Err(invalid("bad padding"));
         }
         let row = dims * 4;
-        if r.offset + count * row + 8 != size {
+        let expected = count
+            .checked_mul(row)
+            .and_then(|m| m.checked_add(r.offset))
+            .and_then(|m| m.checked_add(8));
+        if expected != Some(size) {
             return Err(invalid("size does not match the header"));
         }
         if dims == 0 && count > 0 {
@@ -259,7 +284,10 @@ impl Vectors {
 
     /// Parse an embeddings ndjson file. A missing file is an error; malformed lines are skipped.
     pub fn load_ndjson(path: &Path, rebase: Option<&Rebase>) -> io::Result<Vectors> {
-        let mut file = File::open(path)?;
+        Vectors::read_ndjson(File::open(path)?, rebase)
+    }
+
+    fn read_ndjson(mut file: File, rebase: Option<&Rebase>) -> io::Result<Vectors> {
         let mut out = Vectors::default();
         let mut carry: Vec<u8> = Vec::new();
         let mut block = vec![0u8; READ_BLOCK];
@@ -270,6 +298,9 @@ impl Vectors {
             }
             carry.extend_from_slice(&block[..n]);
             let Some(last_nl) = memchr::memrchr(b'\n', &carry) else {
+                if carry.len() > MAX_LINE {
+                    return Err(invalid("a line longer than 256 MB: not an embeddings file"));
+                }
                 continue;
             };
             let rest = carry.split_off(last_nl + 1);
@@ -285,6 +316,7 @@ impl Vectors {
         out.norms.shrink_to_fit();
         out.hashes.shrink_to_fit();
         out.files.shrink_to_fit();
+        out.dead.shrink_to_fit();
         out.ids.shrink_to_fit();
         Ok(out)
     }
@@ -316,15 +348,21 @@ impl Vectors {
         if self.dims == 0 {
             self.dims = vec.len();
         }
-        if vec.len() != self.dims {
+        // Another width cannot be compared (both TS rankings skip it), but the `Map` the TS loader
+        // builds still holds the entry: it keeps its position, and a later same-id line of the right
+        // width brings it back there.
+        let fits = vec.len() == self.dims;
+        if !fits {
             self.skipped_width += 1;
-            return;
         }
         if let Some(&pos) = self.positions.get(&id) {
             // A Map's `set` on an existing key: the value changes, the position does not.
             let at = pos as usize;
-            self.data[at * self.dims..(at + 1) * self.dims].copy_from_slice(vec);
-            self.norms[at] = norm(vec);
+            if fits {
+                self.data[at * self.dims..(at + 1) * self.dims].copy_from_slice(vec);
+                self.norms[at] = norm(vec);
+            }
+            self.dead[at] = !fits;
             if h.is_some() {
                 self.hashes[at] = h;
             }
@@ -333,8 +371,14 @@ impl Vectors {
         let pos = self.ids.len() as u32;
         self.positions.insert(id.clone(), pos);
         self.ids.push(id);
-        self.data.extend_from_slice(vec);
-        self.norms.push(norm(vec));
+        if fits {
+            self.data.extend_from_slice(vec);
+            self.norms.push(norm(vec));
+        } else {
+            self.data.resize(self.data.len() + self.dims, 0.0);
+            self.norms.push(0.0);
+        }
+        self.dead.push(!fits);
         self.hashes.push(h);
         self.files.push(NO_FILE);
     }
@@ -372,6 +416,7 @@ impl Vectors {
             + self.norms.capacity() * 8
             + self.hashes.capacity() * 8
             + self.files.capacity() * 4
+            + self.dead.capacity()
             + ids * 2 // the id strings, once in `ids` and once as `positions` keys
             + self.positions.capacity() * 16
             + table
@@ -398,6 +443,42 @@ impl Vectors {
         self.files_attached = true;
     }
 
+    /// Which file-table entries pass the filter (`file` contains `contains`; not a test file when
+    /// `exclude_tests`) — `filterEmbeddingsByFile`.
+    fn file_filter(&self, contains: Option<&str>, exclude_tests: bool) -> Vec<bool> {
+        self.file_table
+            .iter()
+            .map(|f| contains.is_none_or(|c| f.contains(c)) && !(exclude_tests && is_test_file(f)))
+            .collect()
+    }
+
+    fn is_candidate(&self, pos: usize, file_ok: &[bool]) -> bool {
+        let file = self.files[pos];
+        file != NO_FILE && file_ok[file as usize] && !self.dead[pos]
+    }
+
+    /// Cosine of every candidate to `query`, as `(score, position)` in load order.
+    fn score_candidates(&self, query: &[f32], file_ok: &[bool]) -> Vec<(f64, u32)> {
+        let qn = norm(query);
+        let dims = self.dims;
+        (0..self.ids.len())
+            .into_par_iter()
+            .filter_map(|pos| {
+                if !self.is_candidate(pos, file_ok) {
+                    return None;
+                }
+                let v = &self.data[pos * dims..(pos + 1) * dims];
+                let mut dot = 0.0f64;
+                for (a, b) in query.iter().zip(v) {
+                    dot += f64::from(*a) * f64::from(*b);
+                }
+                let denom = qn * self.norms[pos];
+                let score = if denom > 0.0 { dot / denom } else { 0.0 };
+                Some((score, pos as u32))
+            })
+            .collect()
+    }
+
     /// `searchSemantic` over the vectors whose file is attached and passes the filter (`file`
     /// contains `contains`; not a test file when `exclude_tests`), top `top_k` by cosine, ties in load
     /// order. A query of another width than the stored vectors matches nothing.
@@ -414,36 +495,8 @@ impl Vectors {
         if query.len() != self.dims || self.dims == 0 || top_k == 0 {
             return Ok(Vec::new());
         }
-        let file_ok: Vec<bool> = self
-            .file_table
-            .iter()
-            .map(|f| contains.is_none_or(|c| f.contains(c)) && !(exclude_tests && is_test_file(f)))
-            .collect();
-        let qn = norm(query);
-        let dims = self.dims;
-        let mut scored: Vec<(f64, u32)> = (0..self.ids.len())
-            .into_par_iter()
-            .filter_map(|pos| {
-                let file = self.files[pos];
-                if file == NO_FILE || !file_ok[file as usize] {
-                    return None;
-                }
-                let v = &self.data[pos * dims..(pos + 1) * dims];
-                let mut dot = 0.0f64;
-                for (a, b) in query.iter().zip(v) {
-                    dot += f64::from(*a) * f64::from(*b);
-                }
-                let denom = qn * self.norms[pos];
-                let score = if denom > 0.0 { dot / denom } else { 0.0 };
-                Some((score, pos as u32))
-            })
-            .collect();
-        // Score descending, then position: the order a stable sort leaves equal scores in.
-        let by_rank = |a: &(f64, u32), b: &(f64, u32)| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then(a.1.cmp(&b.1))
-        };
+        let file_ok = self.file_filter(contains, exclude_tests);
+        let mut scored = self.score_candidates(query, &file_ok);
         if scored.len() > top_k {
             scored.select_nth_unstable_by(top_k - 1, by_rank);
             scored.truncate(top_k);
@@ -457,6 +510,107 @@ impl Vectors {
             })
             .collect())
     }
+
+    /// `computeRRFScores` over several queries, plus `extra` contributions added after them in order
+    /// (the hybrid query's text matches), then the top `top_k` — bit-identical to the TypeScript:
+    /// - per query, candidates ranked by cosine (ties in load order) add `1 / (61 + rank)`;
+    /// - sums accumulate in query order, then `extra` order;
+    /// - equal totals keep the order an id was first scored in (the `Map`'s insertion order), and an
+    ///   `extra` id that is not a candidate is scored after every candidate.
+    pub fn search_rrf(
+        &self,
+        queries: &[Vec<f32>],
+        top_k: usize,
+        contains: Option<&str>,
+        exclude_tests: bool,
+        extra: &[(String, f64)],
+    ) -> Result<Vec<Hit>, &'static str> {
+        if !self.files_attached {
+            return Err("vectors have no files attached");
+        }
+        let file_ok = self.file_filter(contains, exclude_tests);
+        let n = self.ids.len();
+        let mut total = vec![0.0f64; n];
+        let mut first_seen = vec![u64::MAX; n];
+        let mut seq: u64 = 0;
+        for query in queries {
+            if query.len() != self.dims || self.dims == 0 {
+                continue;
+            }
+            let mut scored = self.score_candidates(query, &file_ok);
+            scored.sort_by(by_rank);
+            for (rank, &(_, pos)) in scored.iter().enumerate() {
+                let p = pos as usize;
+                if first_seen[p] == u64::MAX {
+                    first_seen[p] = seq;
+                    seq += 1;
+                }
+                total[p] += 1.0 / ((RRF_K + rank + 1) as f64);
+            }
+        }
+        // Ids the vectors do not hold as candidates: scored only by `extra`, after every candidate.
+        let mut others: Vec<(String, f64, u64)> = Vec::new();
+        let mut other_at: HashMap<&str, usize> = HashMap::new();
+        for (id, boost) in extra {
+            match self.positions.get(id) {
+                Some(&pos) if self.is_candidate(pos as usize, &file_ok) => {
+                    let p = pos as usize;
+                    if first_seen[p] == u64::MAX {
+                        first_seen[p] = seq;
+                        seq += 1;
+                    }
+                    total[p] += boost;
+                }
+                _ => {
+                    if let Some(&at) = other_at.get(id.as_str()) {
+                        others[at].1 += boost;
+                    } else {
+                        other_at.insert(id.as_str(), others.len());
+                        others.push((id.clone(), *boost, seq));
+                        seq += 1;
+                    }
+                }
+            }
+        }
+        let mut ranked: Vec<(f64, u64, Option<u32>, usize)> = (0..n)
+            .filter(|&p| first_seen[p] != u64::MAX)
+            .map(|p| (total[p], first_seen[p], Some(p as u32), 0))
+            .chain(others.iter().enumerate().map(|(i, o)| (o.1, o.2, None, i)))
+            .collect();
+        ranked.sort_by(|a, b| rank_key(b.0).total_cmp(&rank_key(a.0)).then(a.1.cmp(&b.1)));
+        ranked.truncate(top_k);
+        Ok(ranked
+            .into_iter()
+            .map(|(score, _, pos, other)| Hit {
+                id: match pos {
+                    Some(p) => self.ids[p as usize].clone(),
+                    None => others[other].0.clone(),
+                },
+                score,
+            })
+            .collect())
+    }
+}
+
+/// `RRF_K` in retrieval-constants.ts.
+const RRF_K: usize = 60;
+
+/// A score as a sort key with a TOTAL order: NaN (a vector with an infinite component scores
+/// inf/inf) goes last, and -0 equals +0 as it does for `b.score - a.score`. Rust's sort may panic on
+/// a comparator that is not a total order, so NaN cannot be left to `partial_cmp`.
+fn rank_key(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::NEG_INFINITY
+    } else if x == 0.0 {
+        0.0
+    } else {
+        x
+    }
+}
+
+/// Score descending, then position: the order a stable sort leaves equal scores in.
+fn by_rank(a: &(f64, u32), b: &(f64, u32)) -> std::cmp::Ordering {
+    rank_key(b.0).total_cmp(&rank_key(a.0)).then(a.1.cmp(&b.1))
 }
 
 #[cfg(test)]
@@ -516,7 +670,8 @@ mod tests {
             to: "wt:".into(),
         };
         let v = Vectors::load_ndjson(f.path(), Some(&rebase)).unwrap();
-        assert_eq!(v.ids, ["wt:src/a.ts:f:1", "other:x"]);
+        // The narrower line keeps a (dead) place, as the TS Map keeps the entry.
+        assert_eq!(v.ids, ["wt:src/a.ts:f:1", "wt:src/b.ts:g:2", "other:x"]);
         assert_eq!(v.skipped_width(), 1);
         assert_eq!(v.skipped_malformed(), 2);
     }
@@ -687,6 +842,148 @@ mod tests {
             Vectors::load(file_with(&good).path(), None).unwrap().len(),
             2
         );
+    }
+
+    /// `computeRRFScores` + the hybrid text boosts + the final stable sort, written out the TS way.
+    fn rrf_reference(
+        v: &Vectors,
+        queries: &[Vec<f32>],
+        extra: &[(String, f64)],
+        k: usize,
+    ) -> Vec<String> {
+        let mut order: Vec<String> = Vec::new();
+        let mut score: HashMap<String, f64> = HashMap::new();
+        let mut add = |id: &str, s: f64, order: &mut Vec<String>| {
+            if !score.contains_key(id) {
+                order.push(id.to_string());
+            }
+            *score.entry(id.to_string()).or_insert(0.0) += s;
+        };
+        for q in queries {
+            let hits = v.search(q, usize::MAX, None, false).unwrap();
+            for (rank, h) in hits.iter().enumerate() {
+                add(&h.id, 1.0 / ((60 + rank + 1) as f64), &mut order);
+            }
+        }
+        for (id, b) in extra {
+            add(id, *b, &mut order);
+        }
+        let mut all: Vec<(String, f64)> = order
+            .into_iter()
+            .map(|id| {
+                let s = score[&id];
+                (id, s)
+            })
+            .collect();
+        all.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        all.into_iter().take(k).map(|x| x.0).collect()
+    }
+
+    #[test]
+    fn rrf_matches_the_typescript_fusion_with_text_boosts() {
+        // Ties everywhere (few distinct vectors) and an extra id with no vector: the orders a
+        // different tie rule or a different accumulation order would change.
+        let lines: Vec<String> = (0..60)
+            .map(|i| format!(r#"{{"id":"c{i}","vec":[{},{},1]}}"#, i % 4, (i * 7) % 3))
+            .collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let f = write(&refs);
+        let mut v = Vectors::load_ndjson(f.path(), None).unwrap();
+        attach_all(&mut v, "a.ts");
+        let queries = vec![
+            vec![1.0, 0.0, 0.5],
+            vec![0.0, 1.0, 0.5],
+            vec![1.0, 1.0, 1.0],
+        ];
+        let extra: Vec<(String, f64)> = vec![
+            ("c5".into(), 1.0 / 61.0),
+            ("ghost".into(), 1.0 / 62.0),
+            ("c40".into(), 1.0 / 63.0),
+            ("c5".into(), 1.0 / 64.0),
+        ];
+        for k in [1, 7, 70] {
+            let got: Vec<String> = v
+                .search_rrf(&queries, k, None, false, &extra)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.id)
+                .collect();
+            assert_eq!(got, rrf_reference(&v, &queries, &extra, k), "k={k}");
+        }
+        // No queries: the extras alone, in their own order on ties.
+        let only: Vec<String> = v
+            .search_rrf(&[], 3, None, false, &extra)
+            .unwrap()
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(only, ["c5", "ghost", "c40"]);
+    }
+
+    #[test]
+    fn another_width_keeps_its_place_and_a_later_line_revives_it() {
+        // Map semantics: "b" first arrives too wide (unsearchable), then fits — at its FIRST position.
+        let f = write(&[
+            r#"{"id":"a","vec":[1,0]}"#,
+            r#"{"id":"b","vec":[1,0,0]}"#,
+            r#"{"id":"c","vec":[1,0]}"#,
+        ]);
+        let mut v = Vectors::load_ndjson(f.path(), None).unwrap();
+        attach_all(&mut v, "a.ts");
+        let ids = |v: &Vectors| {
+            v.search(&[1.0, 0.0], 10, None, false)
+                .unwrap()
+                .into_iter()
+                .map(|h| h.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&v), ["a", "c"]);
+        let g = write(&[
+            r#"{"id":"a","vec":[1,0]}"#,
+            r#"{"id":"b","vec":[1,0,0]}"#,
+            r#"{"id":"c","vec":[1,0]}"#,
+            r#"{"id":"b","vec":[1,0]}"#,
+        ]);
+        let mut w = Vectors::load_ndjson(g.path(), None).unwrap();
+        attach_all(&mut w, "a.ts");
+        assert_eq!(ids(&w), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn a_vector_with_an_infinite_component_ranks_last_without_panicking() {
+        // inf/inf is NaN; a comparator that is not a total order may panic in Rust's sort.
+        let lines: Vec<String> = (0..40)
+            .map(|i| {
+                if i % 9 == 0 {
+                    format!(r#"{{"id":"s{i}","vec":[1e39,1]}}"#)
+                } else {
+                    format!(r#"{{"id":"s{i}","vec":[{},1]}}"#, i % 3)
+                }
+            })
+            .collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let f = write(&refs);
+        let mut v = Vectors::load_ndjson(f.path(), None).unwrap();
+        attach_all(&mut v, "a.ts");
+        let hits = v.search(&[1.0, 1.0], 40, None, false).unwrap();
+        assert_eq!(hits.len(), 40);
+        assert!(hits.last().unwrap().score.is_nan());
+        assert!(v
+            .search_rrf(&[vec![1.0, 1.0], vec![0.0, 1.0]], 40, None, false, &[])
+            .is_ok());
+    }
+
+    #[test]
+    fn a_header_claiming_more_than_the_file_is_refused() {
+        let bytes = vec_file(&[("a", &[1.0, 2.0], None)]);
+        let header_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
+        // dims = usize::MAX-ish in the header: no allocation, no overflow, an error.
+        let header = br#"{"dims":4611686018427387904,"count":1}"#;
+        let mut forged = VEC_MAGIC.to_vec();
+        forged.extend_from_slice(&(header.len() as u32).to_le_bytes());
+        forged.extend_from_slice(header);
+        forged.extend_from_slice(&bytes[12 + header_len..]);
+        assert!(Vectors::load(file_with(&forged).path(), None).is_err());
     }
 
     #[test]

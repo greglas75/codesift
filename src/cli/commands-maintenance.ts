@@ -451,14 +451,20 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
   // whenever there is one. Every writer of a `.vec` removes the ndjson right after its rename, so one
   // is left only by a process that died between the two — and at 7.6 GB for one rdesigner worktree,
   // a leftover is worth reclaiming rather than leaving to a reindex that may never come.
+  //
+  // Only behind a `.vec` that verifies (magic, trailer, CRC of every byte): a damaged one is not read,
+  // the loader then falls back to the ndjson, and deleting it would cost the only copy of the vectors.
   let vectorsSuperseded = 0;
+  const { verifyVectorFile } = await import("../storage/vector-file.js");
   for (const name of readdirSync(dataDir)) {
     if (!/^[0-9a-f]{8,}\.embeddings\.ndjson$/.test(name)) continue;
     const full = join(dataDir, name);
-    if (!existsSync(full.replace(/\.ndjson$/, ".vec"))) continue;
+    const vec = full.replace(/\.ndjson$/, ".vec");
+    if (!existsSync(vec)) continue;
     try {
       const fileStat = statSync(full);
       if (Date.now() - fileStat.mtimeMs < pruneGraceMs) continue;
+      if (!(await verifyVectorFile(vec))) continue;
       if (!dryRun) unlinkSync(full);
       bytes += fileStat.size;
       files++;

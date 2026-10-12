@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **Semantic search ranks vectors in the Rust core.** On a 463k-vector repo a query takes 19–57 ms
+  instead of ~650 ms, and the vectors live outside the V8 heap. Rankings are identical, ids and scores.
+  Without the native binary the TypeScript path runs as before.
+- **Vectors are stored in a binary file** (`<hash>.embeddings.vec`, checksummed), 5× smaller than the
+  ndjson. Rust loads it in 1.2 s instead of 51.8 s for the ndjson in TypeScript. Existing ndjson files
+  are still read, and are replaced on the next embedding run; `prune` reclaims an ndjson once a valid
+  `.vec` holds its vectors. Rollback: `CODESIFT_VECTOR_FORMAT=ndjson`.
+- New budget for vectors in Rust memory: `CODESIFT_MAX_VECTOR_CACHE_MB` (default RAM/32, at most
+  8 GB), reported in `/health` as `native_vectors`.
+
+### Fixed
+
+- Semantic search no longer gives result slots to vectors of symbols deleted since the last embedding
+  run, and no longer returns ids that have no file in the index.
+
 ## [0.23.0] — 2026-10-11
 
 Large repositories get cheap to search: indexing honours `.gitignore`, and the native BM25 index is

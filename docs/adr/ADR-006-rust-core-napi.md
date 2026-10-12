@@ -831,3 +831,64 @@ The call graph shrinks with it (230M edges with tests on the old index). Worktre
 copies at their next reindex. Not done here: the database file keeps its size (2.5 GB) until something
 runs `VACUUM`, since a full rewrite only frees pages.
 
+
+## Stage 11 — embedding vectors in Rust (2026-10-12)
+
+Stage 10 called cosine search a no-go because the cost was loading the vectors, not scoring them: "a
+binary vector format would pay off in either language and is a format change". Both halves were then
+done, in that order and in separate commits (plan: `docs/specs/2026-10-12-native-vectors-plan.md`).
+
+**E1, language only (ABI 24).** `vectors.rs` parses the existing ndjson in parallel into one contiguous
+`f32` matrix with per-vector norms, behind a `NativeVectors` handle (load, search and file attach are all
+AsyncTasks). Rankings are bit-identical to `searchSemantic`, and that took three exact rules:
+
+- Floats are parsed through f64 and then cast. serde's own f32 path rounds `3.4028235677973366e38` to
+  `f32::MAX`, where JS gives `Infinity`.
+- Cosine accumulates in f64, and ordering is a stable sort over load order.
+- Map semantics: a repeated id keeps its first position and takes the last value.
+
+The daemon keeps sets keyed by the vector file's path, mtime and size, under their own byte budget
+(`CODESIFT_MAX_VECTOR_CACHE_MB`, RAM/32, cap 8 GB, `/health` → `native_vectors`).
+
+**E2, format only.** `<hash>.embeddings.vec` holds:
+
+- magic and a header;
+- the ids and content hashes;
+- a float32 matrix aligned to 64 bytes;
+- a CRC-32 trailer.
+
+Both languages read and write it. A `.vec` always wins over an ndjson, never by mtime. Every writer of
+one kind removes the other: the stale `.vec` goes BEFORE an ndjson is published, so a crash can never
+leave old vectors winning. Checkpoints stay ndjson. Rollback is `CODESIFT_VECTOR_FORMAT=ndjson`.
+`prune` deletes a live repo's ndjson only behind a `.vec` that passes its checksum.
+
+**E3, chunk vectors (ABI 25–26).** Chunk generations are written in the same format, and the chunk and
+hybrid paths fuse their sub-queries in Rust (`searchRrfAsync`, parity against `computeRRFScores` plus the
+hybrid handler's text boosts, ties included). Proactive, not forced by a measurement: the largest chunk
+vector file here is 0.26 GB. Conversation vectors stay in TypeScript; nobody has measured them as a
+cost.
+
+Measured on an rdesigner worktree (462,980 × 768) on the Mac, `scripts/native-vectors-parity.ts`:
+
+| | before | after |
+|---|---:|---:|
+| vector file | 7.60 GB ndjson | **1.50 GB** `.vec` |
+| load, TypeScript | 51.8 s (ndjson) | 4.1 s (`.vec`) |
+| load, Rust | 8.1 s (ndjson) | **1.2 s** (`.vec`) |
+| one query | 647–691 ms | **19–57 ms** |
+| parity (60 queries × 3 filters) | — | **0 diffs**, ids and score bits |
+
+What the cross-model review changed before this shipped:
+
+- **File attach moved off the main thread.** It took 425 ms on the daemon's thread for 478k symbols.
+  Ids and files now cross as two NUL-joined strings: 185 ms on the main thread to join them, and the
+  map is built in Rust.
+- **Attach invalidation also follows SQLite's `data_version`.** A CLI hook's `index_file` runs in another
+  process and never reached the in-process invalidation.
+- **A failed attach keeps the loaded set.** One `SQLITE_BUSY` used to drop it, which cost a full reload.
+- **Removing a repo frees its sets.** Their memory is invisible to every V8 bound.
+- **Hardening in the reader.** Header arithmetic is checked; a NaN score cannot break the comparator;
+  a wrong-width duplicate cannot pin a stale value.
+
+Not done, deliberately: the matrix is read into process memory, not mmap'd. 1.2 s cold is inside the
+gate, and mmap would put the CRC check on the page-fault path.
