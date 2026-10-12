@@ -150,7 +150,8 @@ describe("seedEmbeddingsFromDonor", () => {
 describe("cloneVectorsFromNearestDonor", () => {
   let repo: string;
   let prevDataDir: string | undefined;
-  const git = (args: string[]) => execFileSync("git", args, {
+  // `-c commit.gpgsign=false`: a developer's global config must not decide whether the fixture commits.
+  const git = (args: string[]) => execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
     cwd: repo, encoding: "utf-8",
     env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
   }).trim();

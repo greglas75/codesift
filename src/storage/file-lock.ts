@@ -3,7 +3,7 @@
  * owner. Written for the embedding checkpoint (embedding-checkpoint.ts), where three review rounds
  * found the failure modes recorded below; shared with the machine-wide embedding gate.
  */
-import { link, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { link, readFile, stat, unlink, writeFile } from "node:fs/promises";
 
 /** Only ESRCH proves a process is gone; EPERM and anything unexpected count as alive. */
 function pidIsAlive(pid: number): boolean {
@@ -58,11 +58,17 @@ const holdsLock = (h: Awaited<ReturnType<typeof lockHolder>>): boolean =>
  * `writeFile(wx)` creates the name first and writes after, and a reader in between saw an empty lock
  * and took it over from its live owner.
  *
- * Takeover is a RENAME, not an unlink. Two processes that both read the same dead pid would each
- * unlink and recreate, and the second unlink can remove the first one's fresh lock — two owners.
- * A rename moves exactly one file to a name only this process uses, so after it the mover reads what
- * it actually took: the dead owner's lock (proceed) or a live one's fresh lock (put it back, busy).
- * Both scratch names are `.tmp.<pid>` tails, which prune reclaims once that pid is gone.
+ * Takeover happens under a second lock, `<lock>.takeover`, and only its holder removes a stale lock.
+ * Two processes that both read the same dead pid used to each remove and recreate it, and the second
+ * removal could take the first one's fresh lock — two owners. The first fix renamed the lock aside
+ * and put it back when it turned out live, but in the gap a third process could create one, so the
+ * put-back failed and the live owner's lock was gone while it still believed it held it (found by a
+ * cross-provider review, 2026-10-12). Under the takeover lock the holder re-reads the lock, and
+ * nothing else removes a lock, so what it removes is the stale one it read.
+ *
+ * Residual, accepted: a process that dies while holding the takeover lock — a few milliseconds of
+ * file operations — leaves it to be cleared by the next taker, and two takers clearing it at once can
+ * both proceed. The scratch name is a `.tmp.<pid>` tail, which prune reclaims once that pid is gone.
  */
 export async function acquireLock(lockPath: string): Promise<{ held: true } | { held: false; owner: number }> {
   if (heldHere.has(lockPath)) return { held: false, owner: process.pid };
@@ -71,14 +77,41 @@ export async function acquireLock(lockPath: string): Promise<{ held: true } | { 
   // leftover, took it over — and both believed they owned it. Reserved, a lock naming our pid that
   // this attempt meets can only be a leftover, and the scratch names below are this attempt's alone.
   heldHere.add(lockPath);
-  const result = await acquireReserved(lockPath);
-  if (!result.held) heldHere.delete(lockPath);
+  let result: Awaited<ReturnType<typeof acquireReserved>> = { held: false, owner: 0 };
+  try {
+    result = await acquireReserved(lockPath);
+  } finally {
+    // A throw must not leave the reservation behind: every later open would read it as "held here".
+    if (!result.held) heldHere.delete(lockPath);
+  }
   return result;
+}
+
+/** How long a takeover lock is presumed live when its holder cannot be judged by pid. */
+const TAKEOVER_LOCK_STALE_MS = 10_000;
+
+/** Take `<lock>.takeover` by linking `fresh` (our pid) into place; clear a dead holder's first. */
+async function takeTakeoverLock(takeover: string, fresh: string): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await link(fresh, takeover);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
+    }
+    const holder = await lockHolder(takeover);
+    if (holder === "gone") continue;
+    let age = 0;
+    try { age = Date.now() - (await stat(takeover)).mtimeMs; } catch { continue; }
+    if (holdsLock(holder) && Math.abs(age) < TAKEOVER_LOCK_STALE_MS) return false;
+    await unlink(takeover).catch(() => undefined);
+  }
+  return false;
 }
 
 async function acquireReserved(lockPath: string): Promise<{ held: true } | { held: false; owner: number }> {
   const fresh = `${lockPath}.tmp.${process.pid}.new`;
-  const taken = `${lockPath}.tmp.${process.pid}.takeover`;
+  const takeover = `${lockPath}.takeover`;
   const ownerOf = (h: Awaited<ReturnType<typeof lockHolder>>) => (typeof h === "object" ? h.pid : 0);
   try {
     await writeFile(fresh, String(process.pid));
@@ -98,26 +131,25 @@ async function acquireReserved(lockPath: string): Promise<{ held: true } | { hel
       if (holdsLock(holder)) return { held: false, owner: ownerOf(holder) };
       // A dead process's lock, one an earlier process with our recycled pid left behind (this
       // process holds nothing, per `heldHere`), or an unreadable one past its grace period.
+      if (!(await takeTakeoverLock(takeover, fresh))) continue; // another process is taking it over
       try {
-        await rename(lockPath, taken);
-      } catch {
-        continue; // somebody else moved it first — race them for the create
-      }
-      const moved = await lockHolder(taken);
-      if (holdsLock(moved)) {
-        // Took a live owner's fresh lock. Hand it back; if a third process has created one since,
-        // that one stands and this copy is dropped.
-        try {
-          await link(taken, lockPath);
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-            await rename(taken, lockPath).catch(() => undefined);
-          }
+        const again = await lockHolder(lockPath);
+        if (again !== "gone") {
+          if (holdsLock(again)) return { held: false, owner: ownerOf(again) };
+          await unlink(lockPath).catch(() => undefined);
         }
-        await unlink(taken).catch(() => undefined);
-        return { held: false, owner: ownerOf(moved) };
+        try {
+          await link(fresh, lockPath);
+          return { held: true };
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== "EEXIST") return { held: false, owner: 0 };
+          // Created by a plain link since the unlink: that process owns it now.
+        }
+      } finally {
+        // Only ours to remove if it still names us — a taker that judged ours stale may have replaced it.
+        const holderNow = await lockHolder(takeover);
+        if (typeof holderNow === "object" && holderNow.pid === process.pid) await unlink(takeover).catch(() => undefined);
       }
-      await unlink(taken).catch(() => undefined);
     }
     return { held: false, owner: 0 };
   } finally {

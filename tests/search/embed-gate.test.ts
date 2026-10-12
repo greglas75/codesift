@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { mkdtempSync, readdirSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import {
   withEmbedSlot,
   embedGateStateForTesting,
@@ -15,6 +16,8 @@ import {
  * requests against the same queue. Measured 2026-08-30: hundreds of `embed batch of N stalled …
  * retrying` lines and a daemon unable to answer /health for fifteen minutes after a restart.
  */
+// A pid that is certainly gone. A constant like 999999 is a valid, assignable pid under Linux's pid_max.
+const DEAD_PID = String(spawnSync(process.execPath, ["-e", ""]).pid);
 let slotDir: string;
 beforeEach(() => { slotDir = join(mkdtempSync(join(tmpdir(), "cs-gate-")), "embed-slots"); });
 afterEach(() => rmSync(join(slotDir, ".."), { recursive: true, force: true }));
@@ -111,7 +114,7 @@ describe("embed concurrency gate", () => {
   it("takes over a slot whose holder process is gone", async () => {
     const env = { CODESIFT_EMBED_CONCURRENCY: "1" } as NodeJS.ProcessEnv;
     mkdirSync(slotDir, { recursive: true });
-    writeFileSync(join(slotDir, "slot-0.lock"), "999999");
+    writeFileSync(join(slotDir, "slot-0.lock"), DEAD_PID);
     let ran = false;
     await withEmbedSlot(async () => { ran = true; }, opts(env));
     expect(ran).toBe(true);

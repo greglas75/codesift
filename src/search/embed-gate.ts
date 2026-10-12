@@ -65,9 +65,23 @@ async function defaultSlotDir(): Promise<string | null> {
   try {
     const { loadConfig } = await import("../config.js");
     return `${loadConfig().dataDir}/embed-slots`;
-  } catch {
+  } catch (err) {
+    gateUnavailable(err);
     return null;
   }
+}
+
+let gateUnavailableReported = false;
+/** Said once per process: without it a gate that never engages looks exactly like one that works. */
+function gateUnavailable(err: unknown): null {
+  if (!gateUnavailableReported) {
+    gateUnavailableReported = true;
+    console.error(
+      `[codesift] machine-wide embedding gate unavailable (${err instanceof Error ? err.message : String(err)}) — ` +
+      "only this process's cap applies",
+    );
+  }
+  return null;
 }
 
 /**
@@ -94,19 +108,24 @@ export async function withEmbedSlot<T>(
       // A gate that cannot be set up (no data dir, unwritable) must not stop embedding: the
       // in-process cap still holds.
       const slotDir = options?.slotDir ?? (await defaultSlotDir());
-      if (slotDir) machineSlot = await acquireMachineSlot(limit, slotDir).catch(() => null);
+      if (slotDir) machineSlot = await acquireMachineSlot(limit, slotDir).catch(gateUnavailable);
     }
     return await fn();
   } finally {
-    if (machineSlot) {
-      const { releaseLock } = await import("../storage/file-lock.js");
-      await releaseLock(machineSlot);
+    try {
+      if (machineSlot) {
+        const { releaseLock } = await import("../storage/file-lock.js");
+        await releaseLock(machineSlot).catch(() => undefined);
+      }
+    } finally {
+      // Unconditionally: a release that threw must not leak this process's slot, or every later
+      // request waits forever behind one that is gone.
+      active--;
+      // Release in arrival order. `shift()` on an array this short costs nothing, and the ordering
+      // is the property that matters.
+      const next = waiting.shift();
+      if (next) next();
     }
-    active--;
-    // Release in arrival order. `shift()` on an array this short costs nothing, and the ordering is
-    // the property that matters.
-    const next = waiting.shift();
-    if (next) next();
   }
 }
 

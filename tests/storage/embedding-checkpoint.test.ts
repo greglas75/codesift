@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { EmbeddingCheckpoint } from "../../src/storage/embedding-checkpoint.js";
 import { batchEmbed, contentHashesFor, loadEmbeddings } from "../../src/storage/embedding-store.js";
 
@@ -16,6 +17,8 @@ let dir: string;
 const partial = () => join(dir, "abcdef012345.embeddings.partial.ndjson");
 const vec = (id: string) => ({ id, vec: new Float32Array([1, 2]), h: 1 });
 const isRoot = process.getuid?.() === 0;
+// A pid that is certainly gone. A constant like 999999 is a valid, assignable pid under Linux's pid_max.
+const DEAD_PID = String(spawnSync(process.execPath, ["-e", ""]).pid);
 
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "cs-ckpt-")); });
 afterEach(() => {
@@ -31,7 +34,7 @@ async function openOwned(): Promise<EmbeddingCheckpoint> {
 
 describe("EmbeddingCheckpoint lock", () => {
   it("takes over a dead owner's lock and writes its own pid", async () => {
-    writeFileSync(`${partial()}.lock`, "999999");
+    writeFileSync(`${partial()}.lock`, DEAD_PID);
     const ckpt = await openOwned();
     expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe(String(process.pid));
     await ckpt.release();
@@ -80,8 +83,29 @@ describe("EmbeddingCheckpoint lock", () => {
     await ckpt.release();
   });
 
+  // Bug: a takeover renamed the lock aside and put it back if live; a third process creating one in
+  // between made the put-back fail, and a live owner lost its lock while still believing it held it.
+  it("does not take over a dead owner's lock while another live process is taking it over", async () => {
+    writeFileSync(`${partial()}.lock`, DEAD_PID);
+    writeFileSync(`${partial()}.lock.takeover`, String(process.ppid));
+
+    expect(await EmbeddingCheckpoint.open(partial(), "m")).toEqual({ busy: 0 });
+
+    expect(readFileSync(`${partial()}.lock`, "utf-8")).toBe(DEAD_PID);
+  });
+
+  it("clears a takeover lock its dead holder left behind", async () => {
+    writeFileSync(`${partial()}.lock`, DEAD_PID);
+    writeFileSync(`${partial()}.lock.takeover`, DEAD_PID);
+
+    const ckpt = await openOwned();
+    await ckpt.release();
+
+    expect(readdirSync(dir)).toEqual([]);
+  });
+
   it("leaves no scratch files behind after taking a lock", async () => {
-    writeFileSync(`${partial()}.lock`, "999999");
+    writeFileSync(`${partial()}.lock`, DEAD_PID);
     const ckpt = await openOwned();
     await ckpt.release();
     expect(readdirSync(dir)).toEqual([]);

@@ -436,8 +436,14 @@ export async function embedChunks(
           `[codesift] ${repoName}: cloned chunk vectors from ${cloned.donor} ` +
           `(${cloned.distance} commit(s) back) — embedding only the chunks that differ`,
         );
+      } else if (cloned.donor) {
+        console.error(`[codesift] ${repoName}: not cloning chunk vectors from ${cloned.donor}: ${cloned.reason}`);
       }
-    } catch { /* no donor; embed from scratch */ }
+    } catch (err) {
+      console.error(
+        `[codesift] ${repoName}: chunk clone skipped (${err instanceof Error ? err.message : String(err)}) — embedding from scratch`,
+      );
+    }
 
     // Only vectors written by this model, with hashes beside them, can be reused: older generations
     // carry neither, and their chunks are re-embedded once.

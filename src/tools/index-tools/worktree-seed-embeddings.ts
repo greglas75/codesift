@@ -241,7 +241,7 @@ export async function cloneChunksFromNearestDonor(
   if (best === null) return { seeded: false, reason: "no git history to place a donor in" };
   if (!best) return { seeded: false, reason: "no indexed checkout in this history has chunk vectors" };
   const donor = await reusableChunkManifest(best.index_path, model);
-  if (!donor) return { seeded: false, reason: "donor chunk vectors vanished" };
+  if (!donor) return { seeded: false, reason: "donor chunk vectors vanished", donor: best.name, distance: best.distance };
 
   const donorDir = dirname(best.index_path);
   const generation = `${process.pid}.${randomUUID()}`;
@@ -255,7 +255,7 @@ export async function cloneChunksFromNearestDonor(
   } catch (err) {
     await Promise.all([unlink(chunks).catch(() => undefined), unlink(vectors).catch(() => undefined)]);
     const code = (err as NodeJS.ErrnoException).code ?? "error";
-    return { seeded: false, reason: `filesystem cannot clone the chunk files (${code}) — not copying them` };
+    return { seeded: false, reason: `filesystem cannot clone the chunk files (${code}) — not copying them`, donor: best.name, distance: best.distance };
   }
   try {
     const manifest: ChunkIndexManifest = {
@@ -269,7 +269,7 @@ export async function cloneChunksFromNearestDonor(
     await rename(manifestTmp, manifestPath);
   } catch (err) {
     await Promise.all([chunks, vectors, manifestTmp].map((p) => unlink(p).catch(() => undefined)));
-    return { seeded: false, reason: `chunk seed failed: ${err instanceof Error ? err.message : String(err)}` };
+    return { seeded: false, reason: `chunk seed failed: ${err instanceof Error ? err.message : String(err)}`, donor: best.name, distance: best.distance };
   }
   return { seeded: true, donor: best.name, distance: best.distance };
 }

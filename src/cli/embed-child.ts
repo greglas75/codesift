@@ -61,8 +61,15 @@ async function main(): Promise<void> {
         `[codesift] ${repoName}: cloned ${cloned.vectors} vectors from ${cloned.donor} ` +
         `(${cloned.distance} commit(s) back) — embedding only what differs\n`,
       );
+    } else if (cloned.donor) {
+      // A donor existed and the clone failed: say why, or a full re-embed looks like "no donor".
+      process.stderr.write(`[codesift] ${repoName}: not cloning vectors from ${cloned.donor}: ${cloned.reason}\n`);
     }
-  } catch { /* no donor; embed from scratch */ }
+  } catch (err) {
+    process.stderr.write(
+      `[codesift] ${repoName}: vector clone skipped (${err instanceof Error ? err.message : String(err)}) — embedding from scratch\n`,
+    );
+  }
 
   // Both report failure instead of throwing: embedding is non-fatal to INDEXING,
   // but it is the entire job of this process, so a failure here must not be

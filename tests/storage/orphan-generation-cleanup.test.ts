@@ -61,6 +61,15 @@ describe("orphaned generation files", () => {
     expect(existsSync(published)).toBe(true);
   });
 
+  it("leaves every generation of a hash whose manifest cannot be read", async () => {
+    // Fails closed: deleting a live generation costs hours of embedding, keeping an orphan costs disk.
+    const published = `${target}.generation.4194304.11111111-2222-3333-4444-555555555555`;
+    makeOld(published, 2 * HOUR);
+    writeFileSync(join(dir, "abc123.chunk-index.json"), "{ torn");
+    expect(await cleanupOrphanTempFiles(target)).toBe(0);
+    expect(existsSync(published)).toBe(true);
+  });
+
   it("leaves a recent orphan alone, so a concurrent writer is never raced", async () => {
     const fresh = `${target}.generation.4194304.11111111-2222-3333-4444-555555555555`;
     writeFileSync(fresh, "x");
