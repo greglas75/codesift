@@ -29,7 +29,6 @@ import { promisify } from "node:util";
 import {
   getEmbeddingMetaPath,
   getEmbeddingPath,
-  getPartialEmbeddingPath,
   loadEmbeddingMeta,
   saveEmbeddingMeta,
 } from "../../storage/embedding-store.js";
@@ -131,20 +130,21 @@ export async function seedEmbeddingsFromDonor(
  * commit embedding the same 463k symbols side by side, halving each other's share of a model that
  * serves one request at a time.
  *
- * Only when this repo has neither a vector file nor a checkpoint: anything of its own is newer than
- * a donor's and is resumed instead. The donor must have a COMPLETE vector file (its meta counts the
- * vectors); a donor still being embedded has only a checkpoint, which is not cloned. What the clone
- * gets wrong — files that differ from the donor — the run's content hashes find and re-embed, and
- * vectors from another model are refused by the run's model check.
+ * Only when this repo's own vector file holds no vectors. An EMPTY file left by a failed run counts as
+ * none: measured 2026-10-12, a 0-byte file from 8 October sent a worktree into a from-scratch run of
+ * 463k symbols while a sibling had all of them. A checkpoint does not block the clone — the run loads
+ * both and the checkpoint's vectors win, so the clone only fills what the checkpoint lacks. The donor
+ * must have a COMPLETE vector file (its meta counts the vectors); a donor still being embedded has
+ * only a checkpoint, which is not cloned. What the clone gets wrong — files that differ from the
+ * donor — the run's content hashes find and re-embed, and vectors from another model are refused by
+ * the run's model check.
  */
 export async function cloneVectorsFromNearestDonor(
   rootPath: string,
   repoName: string,
   indexPath: string,
 ): Promise<EmbeddingSeedResult & { donor?: string; distance?: number }> {
-  if (existsSync(getEmbeddingPath(indexPath)) || existsSync(getPartialEmbeddingPath(indexPath))) {
-    return { seeded: false, reason: "has vectors or a checkpoint of its own" };
-  }
+  if (await hasSymbolEmbeddings(indexPath)) return { seeded: false, reason: "has vectors of its own" };
   const { headHistory } = await import("./worktree-seed.js");
   const { listRepos } = await import("../../storage/registry.js");
   const { loadConfig } = await import("../../config.js");

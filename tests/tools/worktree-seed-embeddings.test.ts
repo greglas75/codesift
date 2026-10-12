@@ -172,15 +172,40 @@ describe("cloneVectorsFromNearestDonor", () => {
     expect([...(await loadEmbeddings(vectorsOf(targetIndex()))).keys()]).toEqual([`${TARGET}:a.ts:a:1`]);
   });
 
-  it("leaves a repo that has a checkpoint of its own alone — that is newer than any donor", async () => {
+  it("leaves a repo that has vectors of its own alone", async () => {
     writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0] }]);
     register(git(["rev-parse", "HEAD"]));
-    writeFileSync(join(dir, "target.embeddings.partial.ndjson"), JSON.stringify({ model: "m" }) + "\n");
+    writeFileSync(vectorsOf(targetIndex()), JSON.stringify({ id: `${TARGET}:a.ts:a:1`, vec: [0, 1] }) + "\n");
+    writeFileSync(metaOf(targetIndex()), JSON.stringify({
+      model: "embeddinggemma", provider: "ollama", dimensions: 2, symbol_count: 1, updated_at: 1,
+    }));
 
     const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
 
-    expect(result.seeded).toBe(false);
-    expect(existsSync(vectorsOf(targetIndex()))).toBe(false);
+    expect(result).toEqual({ seeded: false, reason: "has vectors of its own" });
+    expect(readFileSync(vectorsOf(targetIndex()), "utf-8")).toContain(`${TARGET}:a.ts`);
+  });
+
+  // Bug: a 0-byte vector file left by a failed run counted as "has vectors", so a worktree embedded
+  // all 463k symbols from scratch beside a sibling holding every one of them.
+  it("clones over an empty vector file left by a failed run, keeping the checkpoint", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0] }]);
+    register(git(["rev-parse", "HEAD"]));
+    writeFileSync(vectorsOf(targetIndex()), "");
+    writeFileSync(metaOf(targetIndex()), JSON.stringify({
+      model: "embeddinggemma", provider: "ollama", dimensions: 2, symbol_count: 0, updated_at: 1,
+    }));
+    const partial = join(dir, "target.embeddings.partial.ndjson");
+    writeFileSync(partial, JSON.stringify({ model: "embeddinggemma" }) + "\n");
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex());
+
+    if (!result.seeded) {
+      expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
+      return;
+    }
+    expect(result.vectors).toBe(1);
+    expect(readFileSync(partial, "utf-8")).toBe(JSON.stringify({ model: "embeddinggemma" }) + "\n");
   });
 
   it("ignores a checkout whose commit is not in this tree's history", async () => {
