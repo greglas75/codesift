@@ -455,6 +455,8 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
   // Only behind a `.vec` that verifies (magic, trailer, CRC of every byte): a damaged one is not read,
   // the loader then falls back to the ndjson, and deleting it would cost the only copy of the vectors.
   let vectorsSuperseded = 0;
+  const sameFile = (a: import("node:fs").Stats, b: import("node:fs").Stats): boolean =>
+    a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
   const { verifyVectorFile } = await import("../storage/vector-file.js");
   for (const name of readdirSync(dataDir)) {
     if (!/^[0-9a-f]{8,}\.embeddings\.ndjson$/.test(name)) continue;
@@ -464,7 +466,11 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
     try {
       const fileStat = statSync(full);
       if (Date.now() - fileStat.mtimeMs < pruneGraceMs) continue;
+      const vecStat = statSync(vec);
       if (!(await verifyVectorFile(vec))) continue;
+      // The verify streams the whole file, and a writer may switch formats meanwhile (a rollback save
+      // removes the .vec and publishes a new ndjson). Delete only if neither file moved since.
+      if (!sameFile(vecStat, statSync(vec)) || !sameFile(fileStat, statSync(full))) continue;
       if (!dryRun) unlinkSync(full);
       bytes += fileStat.size;
       files++;
