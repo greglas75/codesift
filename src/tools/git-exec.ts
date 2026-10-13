@@ -123,7 +123,9 @@ export function runGitPrefix(
       if (settled) return;
       text += chunk;
       if (text.length <= options.maxChars) return;
+      // Closing our end too: git then dies of SIGPIPE on its next write even if it ignores SIGTERM.
       child.kill("SIGTERM");
+      child.stdout.destroy();
       let end = options.maxChars;
       // Never end on half of a surrogate pair.
       const last = text.charCodeAt(end - 1);
@@ -135,9 +137,9 @@ export function runGitPrefix(
       if (stderr.length < 4096) stderr += chunk;
     });
     child.on("error", (err) => settle(() => reject(err)));
-    child.on("close", (code) => settle(() => {
+    child.on("close", (code, signal) => settle(() => {
       if (code === 0) resolve({ text, truncated: false });
-      else reject(new Error(`git ${args.join(" ")} exited with ${code}: ${stderr.trim()}`));
+      else reject(new Error(`git ${args.join(" ")} ${code === null ? `was killed by ${signal}` : `exited with ${code}`}: ${stderr.trim()}`));
     }));
   });
 }
