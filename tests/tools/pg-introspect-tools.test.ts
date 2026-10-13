@@ -1,9 +1,9 @@
 /**
  * Tests for pg-introspect-tools — Task 8 (RED → GREEN).
  *
- * pg is NOT installed in this repo, so the real dynamic import("pg") also
- * rejects — no mock is needed to exercise the failure path; one test
- * documents that the real import failure produces the structured error.
+ * pg is an optionalDependency, so it may or may not be installed. The module is mocked to fail at
+ * import for the whole file: the client is always injected (PgClientLike), and loadPgClient's
+ * failure path must not depend on what the install happened to include.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
@@ -19,34 +19,22 @@ import {
 import { loadConfig, resetConfigCache } from "../../src/config.js";
 import { TOOL_ARG_FIELDS } from "../../src/storage/usage-tracker.js";
 
+vi.mock("pg", () => {
+  throw new Error("Cannot find module");
+});
+
 // ---------------------------------------------------------------------------
 // loadPgClient — optional-dep loading
 // ---------------------------------------------------------------------------
 
 describe("loadPgClient", () => {
-  it("returns structured error when pg is not installed (real import path — no mock needed)", async () => {
-    // pg is absent from node_modules in this repo, so import("pg") rejects
-    // with MODULE_NOT_FOUND. The function must catch that and return an object.
+  it("returns structured error when pg cannot be imported", async () => {
+    // import("pg") rejects (the file-level mock). The function must catch that and return an object.
     const result = await loadPgClient();
     // Must not throw — result is always an object.
     expect(result).toBeTypeOf("object");
     expect(result).toHaveProperty("error");
     expect((result as { error: string }).error).toContain("pg not installed");
-  });
-
-  it("returns structured error (mocked import failure variant)", async () => {
-    // Explicit vi.mock variant for completeness — confirms the catch branch
-    // fires for any import rejection, not just MODULE_NOT_FOUND.
-    vi.mock("pg", () => {
-      throw new Error("Cannot find module");
-    });
-    const { loadPgClient: loadPgClientFresh } = await import(
-      "../../src/tools/pg-introspect-tools.js?mock=1"
-    ).catch(() => import("../../src/tools/pg-introspect-tools.js"));
-    const result = await loadPgClientFresh();
-    expect(result).toHaveProperty("error");
-    expect((result as { error: string }).error).toContain("pg not installed");
-    vi.restoreAllMocks();
   });
 });
 
