@@ -12,7 +12,7 @@ import {
 import { runTreeSitterParse } from "../../parser/parser-pool.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../../parser/extractors/sql.js";
 import { getLanguageForPath } from "../../parser/parser-manager.js";
-import { embeddingMemBudgetBytes } from "../../config.js";
+import { embeddingMemBudgetBytes, indexEmbeddingsEnabled } from "../../config.js";
 import { buildSymbolText, createEmbeddingProvider } from "../../search/semantic.js";
 import {
   loadEmbeddings,
@@ -278,7 +278,7 @@ export async function embedSymbols(
   repoName: string,
   config: ReturnType<typeof loadConfig>,
 ): Promise<boolean> {
-  if (!config.embeddingProvider) return true;
+  if (!config.embeddingProvider || !indexEmbeddingsEnabled()) return true;
 
   const embeddingPath = getEmbeddingPath(indexPath);
   const metaPath = getEmbeddingMetaPath(indexPath);
@@ -414,7 +414,7 @@ export async function embedChunks(
   config: ReturnType<typeof loadConfig>,
   symbols?: CodeSymbol[],
 ): Promise<boolean> {
-  if (!config.embeddingProvider) return true;
+  if (!config.embeddingProvider || !indexEmbeddingsEnabled()) return true;
 
   const chunkPath = getChunkPath(indexPath);
   const chunkEmbeddingPath = getChunkEmbeddingPath(indexPath);

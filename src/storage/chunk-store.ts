@@ -67,6 +67,61 @@ export interface ChunkIndexManifest {
    * Only the embedding run rewrites them; a query reads chunks and vectors with the same ids.
    */
   id_rebase?: { from: string; to: string };
+  /**
+   * How many distinct files the generation's chunks cover. A published generation is complete for the
+   * index it was made from, which is not the index the checkout has now: measured 2026-10-13, a
+   * worktree indexed while `git worktree add` was still writing its files published 163 chunks from
+   * 7 files, was cloned into 7 sibling worktrees and the main checkout, and there hid 461,823 symbol
+   * vectors from semantic search. Absent in manifests written before then; `chunkGenerationFileCount`
+   * counts those.
+   */
+  files?: number;
+}
+
+/**
+ * Below this share of a checkout's files (or symbols), stored vectors are a fragment, not the
+ * checkout: they are neither cloned into another checkout nor preferred over a fuller set.
+ */
+export const MIN_VECTOR_COVERAGE = 0.5;
+
+/** Counts of legacy generations already read, keyed by path + size + mtime; bounded. */
+const generationFileCounts = new Map<string, number>();
+const MAX_REMEMBERED_GENERATIONS = 512;
+
+/**
+ * Distinct files covered by the chunk generation `manifest` names in `dir`: the manifest's own count,
+ * else one streamed pass over the chunk file (manifests written before the count existed), remembered
+ * for the file's identity so a donor search reads each legacy generation once per process.
+ */
+export async function chunkGenerationFileCount(dir: string, manifest: ChunkIndexManifest): Promise<number> {
+  if (typeof manifest.files === "number") return manifest.files;
+  const path = join(dir, manifest.chunks);
+  const { stat } = await import("node:fs/promises");
+  const st = await stat(path);
+  const key = `${path}:${st.size}:${st.mtimeMs}`;
+  const known = generationFileCounts.get(key);
+  if (known !== undefined) return known;
+  const files = new Set<string>();
+  const lines = createInterface({ input: createReadStream(path, { encoding: "utf8" }), crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      if (!line) continue;
+      try {
+        const file = (JSON.parse(line) as { file?: unknown }).file;
+        if (typeof file === "string" && file) files.add(file);
+      } catch {
+        // A torn last line of an interrupted write covers nothing.
+      }
+    }
+  } finally {
+    lines.close();
+  }
+  if (generationFileCounts.size >= MAX_REMEMBERED_GENERATIONS) {
+    const oldest = generationFileCounts.keys().next().value;
+    if (oldest !== undefined) generationFileCounts.delete(oldest);
+  }
+  generationFileCounts.set(key, files.size);
+  return files.size;
 }
 
 export function getChunkManifestPath(filePath: string): string {
@@ -398,6 +453,7 @@ export async function saveChunkIndex(
       chunks: basename(generationChunkPath),
       embeddings: basename(generationEmbeddingPath),
       ...(vectors ? { model: vectors.model } : {}),
+      files: new Set(chunks.map((c) => c.file).filter(Boolean)).size,
     };
     await writeFile(manifestTmpPath, `${JSON.stringify(manifest)}\n`, "utf8");
     await rename(manifestTmpPath, manifestPath);

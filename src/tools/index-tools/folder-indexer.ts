@@ -17,7 +17,7 @@ import {
 } from "../../storage/registry.js";
 import { buildBM25IndexYielding, isNativeBM25 } from "../../search/bm25.js";
 import { storeBackedBM25 } from "./store-backed-bm25.js";
-import { loadConfig } from "../../config.js";
+import { indexEmbeddingsEnabled, loadConfig } from "../../config.js";
 import { walkDirectory } from "../../utils/walk.js";
 import { canonicalPath, findWorkingTree } from "../../utils/worktree.js";
 import { HASH_SNAPSHOT_VERSION, type FileHashSnapshot } from "../../storage/hash-snapshot.js";
@@ -244,7 +244,7 @@ async function adoptChildIndex(
   // In-process this was `scheduleEmbedding(… embedSymbols + embedChunks …)`. Same queue, so runs for
   // one repo still serialise (the 163 GB lesson above) — the work just happens in embed-child, and
   // the vectors it wrote replace whatever this process had cached.
-  if (config.embeddingProvider && process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
+  if (config.embeddingProvider && indexEmbeddingsEnabled() && process.env["CODESIFT_EMBED_OUT_OF_PROCESS"] !== "1") {
     void scheduleEmbedding(repoName, async () => {
       // The child's own record dies with it; /health reads this process's. Its reason is in the
       // daemon's stderr log, which the child inherits.

@@ -329,7 +329,8 @@ describe("seedWorktreeIndexFromParent", () => {
       }));
       registry({
         [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`), last_git_commit: head },
-        "local/other": { name: "local/other", root: join(dataDir, "other"), index_path: other, last_git_commit: head },
+        // Counts are how a donor shows its vectors cover its index; an entry without them donates nothing.
+        "local/other": { name: "local/other", root: join(dataDir, "other"), index_path: other, last_git_commit: head, symbol_count: 1, file_count: 1 },
       });
 
       const result = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());

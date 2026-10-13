@@ -29,8 +29,16 @@ interface SemanticContext {
   config: ReturnType<typeof import("../config.js").loadConfig>;
   provider: { embed: (texts: string[]) => Promise<number[][]> };
   vecs: number[][];
-  repoMeta: { index_path: string } | null;
+  repoMeta: { index_path: string; file_count?: number; symbol_count?: number } | null;
   chunks: Map<string, CodeChunk> | null;
+  /**
+   * Whether the chunks cover enough of the repo's files to answer for it. A chunk generation can be a
+   * fragment — measured 2026-10-13: 163 chunks from 7 of 26,063 files, cloned from a worktree indexed
+   * while git was still writing it — and preferring it unconditionally hid 461,823 symbol vectors.
+   */
+  chunksCoverRepo: boolean;
+  /** Distinct files the chunks cover, for the note a fallback carries. */
+  chunkFileCount: number;
   /** The published chunk vector file, when the repo has chunks. */
   chunkVectorPath: string | undefined;
   /** The chunk vectors as a TypeScript map — loaded only when the native set cannot answer. */
@@ -92,12 +100,35 @@ async function loadSemanticContext(
   const chunkFileLookup = chunks
     ? new Map([...chunks.entries()].map(([id, c]) => [id, c.file]))
     : new Map<string, string | undefined>();
+  const { MIN_VECTOR_COVERAGE } = await import("../storage/chunk-store.js");
+  const fileCount = repoMeta?.file_count ?? 0;
+  const chunkFileCount = new Set([...chunkFileLookup.values()].filter(Boolean)).size;
+  // An unknown file count keeps the chunks preferred, as before the check existed.
+  const chunksCoverRepo = chunks !== null && (!(fileCount > 0) || chunkFileCount >= MIN_VECTOR_COVERAGE * fileCount);
 
   return {
     config, provider, vecs, repoMeta,
-    chunks, chunkVectorPath, loadChunkEmbeddings, chunkFileLookup,
+    chunks, chunksCoverRepo, chunkFileCount, chunkVectorPath, loadChunkEmbeddings, chunkFileLookup,
     topK, fileFilter, excludeTests, cosineSimilarity,
   };
+}
+
+/**
+ * Whether the chunk index should answer instead of the symbol vectors: it covers the repo, or the
+ * symbol vectors are no better — absent, another model's, or themselves a fragment of the repo's
+ * symbols. A fragment still beats nothing.
+ */
+async function chunksShouldAnswer(ctx: SemanticContext): Promise<boolean> {
+  if (!ctx.chunks) return false;
+  if (ctx.chunksCoverRepo || !ctx.repoMeta) return true;
+  const { currentEmbeddingFile, getEmbeddingPath, getEmbeddingMetaPath, loadEmbeddingMeta } =
+    await import("../storage/embedding-store.js");
+  if (currentEmbeddingFile(getEmbeddingPath(ctx.repoMeta.index_path)) === null) return true;
+  const meta = await loadEmbeddingMeta(getEmbeddingMetaPath(ctx.repoMeta.index_path));
+  if (!meta || !(await storedModelMatches(ctx))) return true;
+  const { MIN_VECTOR_COVERAGE } = await import("../storage/chunk-store.js");
+  const symbolCount = ctx.repoMeta.symbol_count ?? 0;
+  return symbolCount > 0 && meta.symbol_count < MIN_VECTOR_COVERAGE * symbolCount;
 }
 
 /** Whether the stored vectors were made by the active model (a missing meta is not a mismatch). */
@@ -210,13 +241,19 @@ export async function handleSemanticQuery(
   repo: string,
   query: Extract<SubQuery, { type: "semantic" }>,
 ): Promise<SubQueryResult> {
-  const ctx = await loadSemanticContext(repo, query);
+  return semanticFromContext(repo, query, await loadSemanticContext(repo, query));
+}
 
+async function semanticFromContext(
+  repo: string,
+  query: Extract<SubQuery, { type: "semantic" }> | Extract<SubQuery, { type: "hybrid" }>,
+  ctx: SemanticContext,
+): Promise<SubQueryResult> {
   const { detectDimensionMismatch, dimensionMismatchMessage } = await import("../search/semantic.js");
   const queryDim = ctx.vecs[0]?.length ?? 0;
 
-  // Chunk-level semantic search (preferred path)
-  const rankedChunks = ctx.chunks ? await rankChunks(repo, ctx, []) : null;
+  // Chunk-level semantic search (preferred path, when the chunks cover the repo)
+  const rankedChunks = (await chunksShouldAnswer(ctx)) ? await rankChunks(repo, ctx, []) : null;
   if (ctx.chunks && rankedChunks) {
     if (queryDim > 0 && rankedChunks.dims !== queryDim) {
       const text = dimensionMismatchMessage(queryDim, rankedChunks.dims);
@@ -237,7 +274,7 @@ export async function handleSemanticQuery(
   // Fall back to symbol-level semantic search
   const { findRepoSymbols, getEmbeddingCache, getIndexSummary } = await import("../tools/index-tools.js");
   const { searchSemantic } = await import("../search/semantic.js");
-  const sourceLimit = query.source_chars ?? DEFAULT_SOURCE_CHARS;
+  const sourceLimit = ("source_chars" in query ? query.source_chars : undefined) ?? DEFAULT_SOURCE_CHARS;
 
   const primaryVec = ctx.vecs[0];
   if (!primaryVec) throw new Error("Embedding provider returned no vector");
@@ -321,6 +358,16 @@ export async function handleHybridQuery(
   ]);
   if (!ctx.repoMeta) throw new Error(`Repository "${repo}" not found`);
   if (!ctx.chunks) throw new Error(`No chunk index for "${repo}"`);
+  // A fragment of a chunk index would rank only its few files: answer from the symbol vectors, and
+  // say so — the text matches below are fused into chunks, so this answer carries none of them.
+  if (!(await chunksShouldAnswer(ctx))) {
+    const semantic = await semanticFromContext(repo, query, ctx);
+    const note =
+      `(chunk index covers ${ctx.chunkFileCount} of ${ctx.repoMeta.file_count ?? "?"} files — answered from ` +
+      `symbol vectors, without text-match fusion)\n\n`;
+    const data = `${note}${String(semantic.data)}`;
+    return { type: "hybrid", data, tokens: estimateTokens(data) };
+  }
 
   // Text match RRF contributions — map match line -> covering chunk. Added after the semantic fusion,
   // in match order (rankChunks), which is the order the scores accumulate in.

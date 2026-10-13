@@ -24,6 +24,17 @@ let autoLiteLogged = false;
  * auto-skip on low-RAM machines. Only gates the local model — remote providers
  * are unaffected.
  */
+/**
+ * `CODESIFT_INDEX_EMBEDDINGS=0`: indexing embeds nothing, while semantic search still embeds its query
+ * and reads the vectors already on disk. Measured 2026-10-13: eight embedding runs of ~480k-symbol
+ * worktrees held the Mac at load 150-250, where one query embedding took 30 s and every semantic
+ * search timed out — the vectors those runs were making could not be used by anyone.
+ */
+export function indexEmbeddingsEnabled(): boolean {
+  const v = process.env["CODESIFT_INDEX_EMBEDDINGS"];
+  return v !== "0" && v !== "false";
+}
+
 export function localEmbeddingsDisabled(): boolean {
   const v = process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
   if (v === "1" || v === "true") return true;

@@ -175,10 +175,28 @@ describe("cloneVectorsFromNearestDonor", () => {
     resetConfigCache();
   });
 
-  function register(commit: string, name = DONOR): void {
+  function register(commit: string, name = DONOR, counts: { symbol_count?: number; file_count?: number } = {}): void {
     writeFileSync(join(dir, "registry.json"), JSON.stringify({
       updated_at: 1,
-      repos: { [name]: { name, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: commit } },
+      repos: {
+        [name]: {
+          name, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: commit,
+          symbol_count: 1, file_count: 1, ...counts,
+        },
+      },
+    }));
+  }
+
+  /** A published chunk generation of `prefix` (`donor` or `target`) with one chunk per file. */
+  function writeChunkGeneration(prefix: string, repoName: string, files: string[], manifestExtra: object = {}): void {
+    writeFileSync(join(dir, `${prefix}.chunks.ndjson.generation.g`), files.map((file) => JSON.stringify({
+      id: `${repoName}:${file}:1`, file, startLine: 1, endLine: 1, text: `"file":"decoy" ${file}`, tokenCount: 1,
+    })).join("\n") + "\n");
+    writeFileSync(join(dir, `${prefix}.chunk-embeddings.ndjson.generation.g`), files.map((file) =>
+      JSON.stringify({ id: `${repoName}:${file}:1`, vec: [1, 0], h: 5 })).join("\n") + "\n");
+    writeFileSync(join(dir, `${prefix}.chunk-index.json`), JSON.stringify({
+      version: 1, chunks: `${prefix}.chunks.ndjson.generation.g`,
+      embeddings: `${prefix}.chunk-embeddings.ndjson.generation.g`, model: "m", ...manifestExtra,
     }));
   }
 
@@ -285,7 +303,84 @@ describe("cloneVectorsFromNearestDonor", () => {
 
     const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
-    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors" });
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
+  });
+
+  // Bug: a worktree indexed while git was still writing its files published vectors for 7 of its
+  // 26,063 files, and every sibling cloned that fragment as if it were the repo.
+  it("takes no donor whose vectors cover a fragment of its index", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
+    register(git(["rev-parse", "HEAD"]), DONOR, { symbol_count: 10 });
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
+  });
+
+  // Same bug, chunk side. The manifest predates the file count, so the files are counted from the
+  // chunk lines — where a quoted "file" inside the chunk text must not count as a key.
+  it("takes no donor whose chunks cover a fragment of its files", async () => {
+    writeChunkGeneration("donor", DONOR, ["a.ts"]);
+    register(git(["rev-parse", "HEAD"]), DONOR, { file_count: 10 });
+
+    const result = await cloneChunksFromNearestDonor(repo, TARGET, targetIndex(), "m");
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has chunk vectors covering its index" });
+  });
+
+  // Bug: a checkout holding a cloned fragment counted as "has chunk vectors of its own" and never
+  // took a full sibling's set, so it re-embedded every other chunk.
+  it("replaces its own fragment of chunks with a donor's full set", async () => {
+    const files = Array.from({ length: 10 }, (_, i) => `f${i}.ts`);
+    writeChunkGeneration("donor", DONOR, files, { files: 10 });
+    writeChunkGeneration("target", TARGET, ["f0.ts"]);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      updated_at: 1,
+      repos: {
+        [DONOR]: { name: DONOR, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: git(["rev-parse", "HEAD"]), file_count: 10 },
+        [TARGET]: { name: TARGET, root: repo, index_path: targetIndex(), file_count: 10 },
+      },
+    }));
+
+    const result = await cloneChunksFromNearestDonor(repo, TARGET, targetIndex(), "m");
+
+    if (!result.seeded) {
+      expect(result.reason).toMatch(/cannot clone/); // a filesystem without copy-on-write
+      return;
+    }
+    const manifest = await loadChunkManifest(join(dir, "target.chunks.ndjson"));
+    expect(manifest?.files).toBe(10);
+    const reused = await loadChunkVectorsForReuse(join(dir, "target.chunk-embeddings.ndjson"), manifest);
+    expect(reused.vectors.size).toBe(10);
+  });
+
+  // A donor whose own index is a fragment covers itself perfectly; it must cover the target too.
+  it("takes no donor whose index is itself a fragment of this checkout", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      updated_at: 1,
+      repos: {
+        [DONOR]: { name: DONOR, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: git(["rev-parse", "HEAD"]), symbol_count: 1, file_count: 1 },
+        [TARGET]: { name: TARGET, root: repo, index_path: targetIndex(), symbol_count: 10, file_count: 10 },
+      },
+    }));
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
+  });
+
+  // An entry without counts cannot show what its vectors cover, so it donates nothing.
+  it("takes no donor whose registry entry has no counts", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
+    writeFileSync(join(dir, "registry.json"), JSON.stringify({
+      updated_at: 1,
+      repos: { [DONOR]: { name: DONOR, root: join(dir, "elsewhere"), index_path: donorIndex(), last_git_commit: git(["rev-parse", "HEAD"]) } },
+    }));
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
   });
 
   it("never takes vectors from another repository", async () => {
@@ -294,6 +389,6 @@ describe("cloneVectorsFromNearestDonor", () => {
 
     const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma");
 
-    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors" });
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
   });
 });
