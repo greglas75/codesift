@@ -126,7 +126,7 @@ jobs:
       # only for the ones that published) never point at a version that does not exist. Trusted
       # publishing needs each @codesift/core-* package to exist and trust this workflow — the one-time
       # bootstrap is in docs/release-native.md.
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: native-*
           path: native-artifacts
