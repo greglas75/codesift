@@ -173,6 +173,7 @@ export async function diffOutline(
 }
 
 const MAX_DIFF_CHARS = 500;
+const DIFF_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
  * List all symbol names in each changed file.
@@ -229,9 +230,11 @@ export async function changedSymbols(
   if (options?.include_diff) {
     for (const entry of result) {
       try {
+        // Only MAX_DIFF_CHARS are kept, but git must be allowed to finish: a buffer smaller than the
+        // whole diff makes the read throw, and the file came back as `diff: null`.
         const raw = await runGit(
           ["diff", `${since}..${untilRef}`, "--", entry.file],
-          { cwd: index.root, timeout: 10_000, maxBuffer: 50_000 },
+          { cwd: index.root, timeout: 10_000, maxBuffer: DIFF_MAX_BUFFER },
         );
         entry.diff = raw.length > MAX_DIFF_CHARS
           ? raw.slice(0, MAX_DIFF_CHARS) + "\n... (truncated)"
