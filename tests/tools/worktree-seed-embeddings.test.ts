@@ -370,6 +370,17 @@ describe("cloneVectorsFromNearestDonor", () => {
     expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
   });
 
+  // A fresh worktree has no registry entry yet; the count its caller holds still rules out a donor
+  // whose own index is a fragment.
+  it("judges a donor against the count the caller passes for an unregistered checkout", async () => {
+    writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);
+    register(git(["rev-parse", "HEAD"]), DONOR, { symbol_count: 1 });
+
+    const result = await cloneVectorsFromNearestDonor(repo, TARGET, targetIndex(), "embeddinggemma", 10);
+
+    expect(result).toEqual({ seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" });
+  });
+
   // An entry without counts cannot show what its vectors cover, so it donates nothing.
   it("takes no donor whose registry entry has no counts", async () => {
     writeDonor([{ id: `${DONOR}:a.ts:a:1`, vec: [1, 0], h: 7 }]);

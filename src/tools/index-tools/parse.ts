@@ -430,7 +430,7 @@ export async function embedChunks(
     // repo re-embedded every chunk, and a restart threw the pass away. Best effort, like the rest.
     try {
       const { cloneChunksFromNearestDonor, donorDistanceText } = await import("./worktree-seed-embeddings.js");
-      const cloned = await cloneChunksFromNearestDonor(rootPath, repoName, indexPath, provider.model);
+      const cloned = await cloneChunksFromNearestDonor(rootPath, repoName, indexPath, provider.model, fileEntries.length);
       if (cloned.seeded) {
         console.error(
           `[codesift] ${repoName}: cloned chunk vectors from ${cloned.donor} ` +

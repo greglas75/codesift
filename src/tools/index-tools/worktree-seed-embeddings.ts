@@ -175,14 +175,16 @@ export async function cloneVectorsFromNearestDonor(
   indexPath: string,
   /** Only a donor embedded by this model: another model's vectors are incomparable and get re-embedded. */
   model: string,
+  /** This checkout's symbol count when the caller holds its index — a fresh worktree has no registry entry yet. */
+  symbolCount?: number,
 ): Promise<EmbeddingSeedResult & { donor?: string; distance?: number | null }> {
-  const own = await registryEntry(repoName);
+  const ownCount = (await registryEntry(repoName))?.symbol_count ?? symbolCount;
   if (await hasSymbolEmbeddings(indexPath)) {
-    if (!own || (await symbolVectorsCover(indexPath, model, own.symbol_count))) {
+    if (ownCount === undefined || (await symbolVectorsCover(indexPath, model, ownCount))) {
       return { seeded: false, reason: "has vectors of its own" };
     }
   }
-  const best = await nearestDonor(rootPath, repoName, (c) => symbolVectorsCover(c.index_path, model, c.symbol_count, own?.symbol_count));
+  const best = await nearestDonor(rootPath, repoName, (c) => symbolVectorsCover(c.index_path, model, c.symbol_count, ownCount));
   if (!best) return { seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" };
 
   const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);
@@ -316,14 +318,16 @@ export async function cloneChunksFromNearestDonor(
   repoName: string,
   indexPath: string,
   model: string,
+  /** This checkout's file count when the caller holds its index — a fresh worktree has no registry entry yet. */
+  fileCount?: number,
 ): Promise<EmbeddingSeedResult & { donor?: string; distance?: number | null }> {
-  const own = await registryEntry(repoName);
+  const ownCount = (await registryEntry(repoName))?.file_count ?? fileCount;
   if (await reusableChunkManifest(indexPath, model)) {
-    if (!own || (await chunkVectorsCover(indexPath, model, own.file_count))) {
+    if (ownCount === undefined || (await chunkVectorsCover(indexPath, model, ownCount))) {
       return { seeded: false, reason: "has chunk vectors of its own" };
     }
   }
-  const best = await nearestDonor(rootPath, repoName, (c) => chunkVectorsCover(c.index_path, model, c.file_count, own?.file_count));
+  const best = await nearestDonor(rootPath, repoName, (c) => chunkVectorsCover(c.index_path, model, c.file_count, ownCount));
   if (!best) return { seeded: false, reason: "no indexed checkout of this repository has chunk vectors covering its index" };
   const donor = await reusableChunkManifest(best.index_path, model);
   if (!donor) return { seeded: false, reason: "donor chunk vectors vanished", donor: best.name, distance: best.distance };
