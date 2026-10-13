@@ -7,11 +7,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { indexFolder, stopAllWatchersForTesting } from "../../src/tools/index-tools.js";
 import { changedSymbols } from "../../src/tools/diff-tools.js";
+import { runGitPrefix } from "../../src/tools/git-exec.js";
 import { resetConfigCache } from "../../src/config.js";
 
 const REPO = "local/changed-diff";
 let tmpDir: string;
 let root: string;
+const previousDataDir = process.env["CODESIFT_DATA_DIR"];
 
 function git(...args: string[]): void {
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
@@ -44,7 +46,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   stopAllWatchersForTesting();
-  delete process.env["CODESIFT_DATA_DIR"];
+  if (previousDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+  else process.env["CODESIFT_DATA_DIR"] = previousDataDir;
   resetConfigCache();
   await rm(tmpDir, { recursive: true, force: true });
 });
@@ -56,7 +59,14 @@ describe("changedSymbols include_diff", () => {
     const [entry] = await changedSymbols(REPO, "HEAD~1", "HEAD", { include_diff: true });
 
     expect(entry?.file).toBe("big.ts");
-    expect(entry?.diff).toContain("diff --git a/big.ts b/big.ts");
+    expect(entry?.diff).toContain('-  return "a";');
     expect(entry?.diff).toMatch(/\.\.\. \(truncated\)$/);
+  });
+
+  // Bug it catches: a git that fails before writing anything read as an empty diff.
+  it("rejects when git exits non-zero instead of returning an empty prefix", async () => {
+    await expect(
+      runGitPrefix(["diff", "no-such-ref..HEAD"], { cwd: root, timeout: 10_000, maxChars: 500 }),
+    ).rejects.toThrow(/exited with/);
   });
 });

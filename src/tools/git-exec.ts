@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -80,4 +80,64 @@ export function describeGitTimeout(
     `git ${args[0] ?? ""} exceeded its ${options.timeout} ms limit in ${options.cwd}` +
     `${signal ? ` (killed by ${signal})` : ""} — the command did not fail, it ran out of time`
   );
+}
+
+export interface GitPrefix {
+  text: string;
+  /** True when git had more to say than `maxChars` and was stopped. */
+  truncated: boolean;
+}
+
+/**
+ * The first `maxChars` characters of git's stdout, stopping git as soon as they have arrived.
+ *
+ * For a caller that keeps only a prefix: `runGit` must buffer the WHOLE output, so a small
+ * `maxBuffer` turns a large diff into a throw and a large one holds megabytes to keep 500 chars.
+ * A non-zero exit before the prefix is complete still rejects — a failing git is not an empty diff.
+ */
+export function runGitPrefix(
+  args: string[],
+  options: { cwd: string; timeout: number; maxChars: number },
+): Promise<GitPrefix> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, { cwd: options.cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let text = "";
+    let stderr = "";
+    let settled = false;
+    const settle = (done: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      done();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      settle(() => reject(new Error(
+        `git ${args[0] ?? ""} exceeded its ${options.timeout} ms limit in ${options.cwd}` +
+        " — the command did not fail, it ran out of time",
+      )));
+    }, options.timeout);
+
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
+      if (settled) return;
+      text += chunk;
+      if (text.length <= options.maxChars) return;
+      child.kill("SIGTERM");
+      let end = options.maxChars;
+      // Never end on half of a surrogate pair.
+      const last = text.charCodeAt(end - 1);
+      if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+      settle(() => resolve({ text: text.slice(0, end), truncated: true }));
+    });
+    child.stderr.setEncoding("utf-8");
+    child.stderr.on("data", (chunk: string) => {
+      if (stderr.length < 4096) stderr += chunk;
+    });
+    child.on("error", (err) => settle(() => reject(err)));
+    child.on("close", (code) => settle(() => {
+      if (code === 0) resolve({ text, truncated: false });
+      else reject(new Error(`git ${args.join(" ")} exited with ${code}: ${stderr.trim()}`));
+    }));
+  });
 }
