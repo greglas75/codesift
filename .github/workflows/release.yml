@@ -63,7 +63,7 @@ jobs:
       - name: Build the addon
         shell: bash
         run: node scripts/build-native.mjs ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: native-${{ matrix.tag }}
           path: native/codesift-core.${{ matrix.tag }}.node
