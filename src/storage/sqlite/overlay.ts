@@ -101,8 +101,16 @@ CREATE TEMP TRIGGER overlay_files_delete INSTEAD OF DELETE ON files BEGIN
 END;
 `;
 
+const TRIGGERS_AT = OVERLAY_ATTACH_SQL.indexOf("CREATE TEMP TRIGGER");
+if (TRIGGERS_AT <= OVERLAY_ATTACH_SQL.indexOf("CREATE TEMP VIEW files")) {
+  throw new Error("OVERLAY_ATTACH_SQL must create both views before its first trigger");
+}
 /** The views alone: what a connection gets when its SQLite refuses the triggers. */
-const OVERLAY_VIEWS_SQL = OVERLAY_ATTACH_SQL.slice(0, OVERLAY_ATTACH_SQL.indexOf("CREATE TEMP TRIGGER"));
+const OVERLAY_VIEWS_SQL = OVERLAY_ATTACH_SQL.slice(0, TRIGGERS_AT);
+
+const OVERLAY_WRITE_PROBE_SQL =
+  "CREATE TABLE t (x); CREATE TEMP VIEW v AS SELECT x FROM main.t;" +
+  " CREATE TEMP TRIGGER v_insert INSTEAD OF INSERT ON v BEGIN INSERT INTO main.t (x) VALUES (NEW.x); END;";
 
 const writesSupported = new WeakMap<object, boolean>();
 
@@ -110,25 +118,24 @@ const writesSupported = new WeakMap<object, boolean>();
  * Whether this SQLite lets a TEMP trigger write to `main.<table>`, which every overlay write does.
  * 3.51 (node:sqlite on Node 22) refuses it — "qualified table names are not allowed" — and 3.53
  * (Node 24, the Rust store) accepts it. Without it no overlay is seeded and an overlay another
- * process made opens with its views only: reads work, a whole-index write makes it plain.
+ * process made opens with its views only: reads work, a whole-index write makes it plain
+ * (`clearIndexRows` needs no trigger). Only that refusal answers "no"; any other error is thrown.
  */
 export function overlayWritesSupported(Ctor: typeof DatabaseSyncType): boolean {
   const known = writesSupported.get(Ctor);
   if (known !== undefined) return known;
   const db = new Ctor(":memory:");
-  let supported = true;
   try {
-    db.exec(
-      "CREATE TABLE t (x); CREATE TEMP VIEW v AS SELECT x FROM main.t;" +
-        " CREATE TEMP TRIGGER v_insert INSTEAD OF INSERT ON v BEGIN INSERT INTO main.t (x) VALUES (NEW.x); END;",
-    );
-  } catch {
-    supported = false;
+    db.exec(OVERLAY_WRITE_PROBE_SQL);
+    writesSupported.set(Ctor, true);
+    return true;
+  } catch (err) {
+    if (!/qualified table names are not allowed/.test(err instanceof Error ? err.message : String(err))) throw err;
+    writesSupported.set(Ctor, false);
+    return false;
   } finally {
     db.close();
   }
-  writesSupported.set(Ctor, supported);
-  return supported;
 }
 
 /** A file row without the upsert clause SQLite refuses on a view; the trigger replaces in place. */

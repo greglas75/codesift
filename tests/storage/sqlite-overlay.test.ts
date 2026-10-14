@@ -20,7 +20,9 @@ import {
 } from "../../src/storage/sqlite/accessors.js";
 import { findSymbolsSqlite, getIndexMetaSqlite, streamSymbolsSqlite } from "../../src/storage/sqlite/queries.js";
 import { findSymbolsByRequestedIdsSqlite } from "../../src/storage/sqlite/narrow-queries.js";
-import { OVERLAY_ATTACH_SQL, OVERLAY_BASE_KEY, OVERLAY_ROWID_BASE, attachOverlay } from "../../src/storage/sqlite/overlay.js";
+import {
+  OVERLAY_ATTACH_SQL, OVERLAY_BASE_KEY, OVERLAY_ROWID_BASE, attachOverlay, clearIndexRows, isOverlayConnection,
+} from "../../src/storage/sqlite/overlay.js";
 import { isIndexStorageError } from "../../src/storage/sqlite/errors.js";
 import { baseForDonor, writeOverlayIndex } from "../../src/tools/index-tools/worktree-overlay.js";
 import { HAS_OVERLAY_WRITES } from "../helpers/overlay-sqlite.js";
@@ -223,6 +225,38 @@ describeWithOverlay("an overlay index against the full copy it replaces", () => 
   });
 
   // Bug it catches: the seed still copying the donor — the whole point is that it does not.
+  // Bug it catches: on a SQLite that refuses `main.` in a TEMP trigger (Node 22), an overlay another
+  // process made opening with no views (base rows gone from every answer) or failing to open, and a
+  // whole-index write that cannot make it plain without the triggers.
+  it("reads through its views on a SQLite that refuses the triggers, and a whole write makes it plain", async () => {
+    await makeOverlay();
+    class RefusingTriggers extends DatabaseSync {
+      override exec(sql: string): void {
+        if (sql.includes("CREATE TEMP TRIGGER")) {
+          throw new Error("qualified table names are not allowed on INSERT, UPDATE, and DELETE statements within triggers");
+        }
+        super.exec(sql);
+      }
+    }
+    const rows = (db: DatabaseSync) => db.prepare("SELECT id, file FROM symbols ORDER BY rowid").all();
+    const reference = new DatabaseSync(plain);
+    const expected = rows(reference);
+    reference.close();
+    const db = new RefusingTriggers(overlay);
+    try {
+      expect(attachOverlay(db, overlay)).toBe(true);
+      expect(rows(db)).toEqual(expected);
+      expect(() => db.prepare("DELETE FROM symbols").run()).toThrow(/view/);
+
+      clearIndexRows(db);
+
+      expect(isOverlayConnection(db)).toBe(false);
+      expect(rows(db)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("stores only the worktree's own rows", async () => {
     await makeOverlay();
     await applyWrites(overlay);

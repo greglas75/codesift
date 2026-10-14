@@ -247,10 +247,6 @@ export async function seedWorktreeIndexFromParent(
   if (!DatabaseSync) {
     return { seeded: false, reason: "node:sqlite unavailable (Node < 22.5)" };
   }
-  const { overlayWritesSupported } = await import("../../storage/sqlite/overlay.js");
-  if (!overlayWritesSupported(DatabaseSync)) {
-    return { seeded: false, reason: "this SQLite cannot write through an overlay (Node 24 or the native store can)" };
-  }
 
   // Write to a temp sibling and rename, so an interrupted seed never leaves a half-copied database
   // sitting at the path the registry is about to point at. The copy is an OVERLAY on a shared base
@@ -262,6 +258,10 @@ export async function seedWorktreeIndexFromParent(
   let worktreeMtimes = new Map<string, number>();
   let vectorPrefixName = worktreeName;
   try {
+    const { overlayWritesSupported } = await import("../../storage/sqlite/overlay.js");
+    if (!overlayWritesSupported(DatabaseSync)) {
+      return { seeded: false, reason: "this SQLite cannot write through an overlay (Node 24 or the native store can)" };
+    }
     const { baseForDonor, writeOverlayIndex, removeIndexDatabase } = await import("./worktree-overlay.js");
     const picked = await baseForDonor(parentDb, donor, parentName, config.dataDir);
     ({ files, symbols, mtimes: worktreeMtimes } = await writeOverlayIndex(tempDb, {
