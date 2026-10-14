@@ -37,11 +37,18 @@ export function storedEntryKey(entry: FileEntry): string {
   return JSON.stringify(fileEntryToRow(entry));
 }
 
+/** Column of `symbolToRow` holding the parent symbol's id, which carries a prefix like `id` does. */
+const PARENT_COLUMN = 13;
+
+function withoutPrefix(id: string, prefixes: readonly string[]): string {
+  const prefix = prefixes.find((p) => id.startsWith(p));
+  return prefix === undefined ? id : id.slice(prefix.length);
+}
+
 function symbolKey(sym: CodeSymbol, prefixes: readonly string[]): string {
   const row = symbolToRow(sym);
-  const id = sym.id;
-  const prefix = prefixes.find((p) => id.startsWith(p));
-  row[0] = prefix === undefined ? id : id.slice(prefix.length);
+  row[0] = withoutPrefix(sym.id, prefixes);
+  if (typeof row[PARENT_COLUMN] === "string") row[PARENT_COLUMN] = withoutPrefix(row[PARENT_COLUMN], prefixes);
   return JSON.stringify(row);
 }
 
@@ -79,8 +86,8 @@ export function planOverlayDelta(input: {
     const entry = entryByPath.get(path);
     if (!entry) continue; // parsed but not kept (merge dropped it): counted as removed below
     const fresh = newByFile.get(path) ?? [];
-    const stored = input.storedSymbolsByFile.get(path);
-    if (stored && input.storedEntries.has(path) && sameSymbols(stored, fresh, input.idPrefixes)) {
+    const stored = input.storedSymbolsByFile.get(path) ?? [];
+    if (input.storedEntries.has(path) && sameSymbols(stored, fresh, input.idPrefixes)) {
       unchanged.add(path);
     } else {
       replaced.push({ path, symbols: fresh, entry });
@@ -103,7 +110,7 @@ export function planOverlayDelta(input: {
       symbols.push(sym);
     } else if (!restored.has(sym.file)) {
       restored.add(sym.file);
-      symbols.push(...input.storedSymbolsByFile.get(sym.file)!);
+      symbols.push(...(input.storedSymbolsByFile.get(sym.file) ?? []));
     }
   }
 

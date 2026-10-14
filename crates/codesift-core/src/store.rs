@@ -120,7 +120,10 @@ pub(crate) type Result<T> = std::result::Result<T, StoreError>;
 pub(crate) fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open_with_flags(
         db_path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        // URI: an overlay attaches its base as a read-only `file:` URI (overlay.rs).
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX
+            | OpenFlags::SQLITE_OPEN_URI,
     )?;
     // Same wait as the TypeScript connections: a writer mid-commit is a reason to wait, not to fail.
     conn.busy_timeout(Duration::from_millis(5000))?;

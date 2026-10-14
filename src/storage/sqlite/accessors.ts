@@ -246,7 +246,7 @@ export async function setFileMtimesSqlite(
       insFile.run(...(fileEntryToRow({ ...rowToFileEntry(row), mtime_ms: mtime }) as never[]));
       written++;
     }
-    writeMetaValue(db, "updated_at", String(Date.now()));
+    if (written > 0) writeMetaValue(db, "updated_at", String(Date.now()));
     db.exec("COMMIT");
   } catch (err) {
     rollbackQuietly(db);

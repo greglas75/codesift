@@ -2,8 +2,9 @@
 // thing it replaces: a full copy of the donor taking the same writes. Every read path must give the
 // same answer from both — a difference is a wrong search result, not a cosmetic one.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { rename } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
@@ -19,7 +20,7 @@ import {
 } from "../../src/storage/sqlite/accessors.js";
 import { findSymbolsSqlite, getIndexMetaSqlite, streamSymbolsSqlite } from "../../src/storage/sqlite/queries.js";
 import { findSymbolsByRequestedIdsSqlite } from "../../src/storage/sqlite/narrow-queries.js";
-import { OVERLAY_ATTACH_SQL, OVERLAY_BASE_KEY } from "../../src/storage/sqlite/overlay.js";
+import { OVERLAY_ATTACH_SQL, OVERLAY_BASE_KEY, OVERLAY_ROWID_BASE, attachOverlay } from "../../src/storage/sqlite/overlay.js";
 import { isIndexStorageError } from "../../src/storage/sqlite/errors.js";
 import { baseForDonor, writeOverlayIndex } from "../../src/tools/index-tools/worktree-overlay.js";
 import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
@@ -59,10 +60,17 @@ let plain: string;
 let overlay: string;
 let base: string;
 
-async function makeOverlay(): Promise<void> {
+/** `highRowids`: a donor whose rows already sit above OVERLAY_ROWID_BASE, as a former overlay's do. */
+async function makeOverlay(highRowids = false): Promise<void> {
   const donorDb = join(dir, "aaaaaaaaaaaa.index.db");
   await saveIndexSqlite(donorDb, donorIndex());
   closeAllIndexDbs();
+  if (highRowids) {
+    const d = new DatabaseSync(donorDb);
+    d.prepare("UPDATE symbols SET rowid = rowid + ?").run(OVERLAY_ROWID_BASE);
+    d.prepare("UPDATE files SET rowid = rowid + ?").run(OVERLAY_ROWID_BASE);
+    d.close();
+  }
   const picked = await baseForDonor(donorDb, { name: FAMILY, root: dir, commit: null }, FAMILY, dir);
   base = picked.base.path;
   const temp = `${overlay}.seeding`;
@@ -111,6 +119,8 @@ async function streamed(dbPath: string): Promise<string[]> {
 
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), "codesift-overlay-"));
+  // The donor's checkout: a base records its uncommitted files, and refuses when git cannot say.
+  execFileSync("git", ["init", "-q"], { cwd: dir });
   plain = join(dir, "cccccccccccc.index.db");
   overlay = join(dir, "bbbbbbbbbbbb.index.db");
 });
@@ -132,9 +142,10 @@ describe("overlay SQL", () => {
 
 describeWithSqlite("an overlay index against the full copy it replaces", () => {
   // Bug it catches: any read path that sees the overlay alone, the base alone, a masked file's old
-  // rows, or rows out of the order a plain table keeps them in.
-  it("answers every read the same after the same writes", async () => {
-    await makeOverlay();
+  // rows, or rows out of the order a plain table keeps them in — and, with a donor whose rowids are
+  // already high, a new row given a rowid a base row still holds.
+  it.each([{ rowids: "low", high: false }, { rowids: "high", high: true }])("answers every read the same after the same writes ($rowids base rowids)", async ({ high }) => {
+    await makeOverlay(high);
     await applyWrites(plain);
     await applyWrites(overlay);
 
@@ -174,19 +185,40 @@ describeWithSqlite("an overlay index against the full copy it replaces", () => {
     closeAllIndexDbs();
     const raw = new DatabaseSync(overlay, { open: true });
     const pinned = raw.prepare("SELECT value FROM meta WHERE key = ?").get(OVERLAY_BASE_KEY);
+    // Written to the plain tables, not through the triggers (which number rows from OVERLAY_ROWID_BASE).
+    const maxRowid = (raw.prepare("SELECT max(rowid) AS m FROM symbols").get() as { m: number }).m;
     raw.close();
     expect(pinned).toBeUndefined();
+    expect(maxRowid).toBeLessThan(OVERLAY_ROWID_BASE);
     expect((await loadIndexSqlite(overlay))?.symbols.map((s) => s.name)).toEqual(["z"]);
   });
 
-  // Bug it catches: a deleted base answered as an index holding only the worktree's few changes.
-  it("refuses to open when its base is gone", async () => {
+  // Bug it catches: a deleted base answered as an index holding only the worktree's few changes —
+  // or re-created EMPTY by the open (a plain ATTACH creates a missing file), which every later open
+  // would then take for the base.
+  it("refuses to open when its base is gone, and leaves it gone", async () => {
     await makeOverlay();
     closeAllIndexDbs();
     rmSync(base, { force: true });
     const err = await loadIndexSqlite(overlay).catch((e: unknown) => e);
     expect(isIndexStorageError(err)).toBe(true);
     expect((err as { code: string }).code).toBe("OVERLAY_BASE_MISSING");
+    expect(existsSync(base)).toBe(false);
+  });
+
+  // Bug it catches: a base attached writable — one stray write changes every worktree built on it,
+  // whatever its file mode says (root ignores 0444).
+  it("attaches its base read-only", async () => {
+    await makeOverlay();
+    closeAllIndexDbs();
+    chmodSync(base, 0o644); // what root sees whatever the mode: only the attach can keep it read-only
+    const db = new DatabaseSync(overlay);
+    try {
+      attachOverlay(db, overlay);
+      expect(() => db.exec("DELETE FROM ovbase.symbols")).toThrow(/readonly/);
+    } finally {
+      db.close();
+    }
   });
 
   // Bug it catches: the seed still copying the donor — the whole point is that it does not.

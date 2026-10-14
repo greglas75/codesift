@@ -40,7 +40,7 @@ CREATE TEMP TRIGGER overlay_symbols_insert INSTEAD OF INSERT ON symbols BEGIN
     FROM ovbase.files WHERE path = NEW.file AND NOT EXISTS (SELECT 1 FROM main.overlay_masked WHERE path = NEW.file) AND NOT EXISTS (SELECT 1 FROM main.overlay_masked_files WHERE path = NEW.file);
   INSERT OR IGNORE INTO main.overlay_masked(path) VALUES (NEW.file);
   INSERT INTO main.symbols(rowid, id, file, name, kind, start_line, end_line, start_col, end_col, start_byte, end_byte, signature, docstring, source, parent, is_async, is_exported, extras)
-    VALUES ((SELECT max(ifnull(max(rowid), 0), 1099511627776) FROM main.symbols) + 1, NEW.id, NEW.file, NEW.name, NEW.kind, NEW.start_line, NEW.end_line, NEW.start_col, NEW.end_col, NEW.start_byte, NEW.end_byte, NEW.signature, NEW.docstring, NEW.source, NEW.parent, NEW.is_async, NEW.is_exported, NEW.extras);
+    VALUES (max((SELECT ifnull(max(rowid), 0) FROM main.symbols), (SELECT ifnull(max(rowid), 0) FROM ovbase.symbols), 1099511627776) + 1, NEW.id, NEW.file, NEW.name, NEW.kind, NEW.start_line, NEW.end_line, NEW.start_col, NEW.end_col, NEW.start_byte, NEW.end_byte, NEW.signature, NEW.docstring, NEW.source, NEW.parent, NEW.is_async, NEW.is_exported, NEW.extras);
 END;
 CREATE TEMP TRIGGER overlay_symbols_delete INSTEAD OF DELETE ON symbols BEGIN
   INSERT INTO main.symbols(rowid, id, file, name, kind, start_line, end_line, start_col, end_col, start_byte, end_byte, signature, docstring, source, parent, is_async, is_exported, extras)
@@ -58,7 +58,7 @@ CREATE TEMP TRIGGER overlay_files_insert INSTEAD OF INSERT ON files BEGIN
     FROM ovbase.files WHERE path = NEW.path AND NOT EXISTS (SELECT 1 FROM main.overlay_masked WHERE path = NEW.path) AND NOT EXISTS (SELECT 1 FROM main.overlay_masked_files WHERE path = NEW.path);
   INSERT OR IGNORE INTO main.overlay_masked_files(path) VALUES (NEW.path);
   INSERT OR REPLACE INTO main.files(rowid, path, language, symbol_count, last_modified, mtime_ms, stale)
-    VALUES (coalesce((SELECT rowid FROM main.files WHERE path = NEW.path), (SELECT max(ifnull(max(rowid), 0), 1099511627776) FROM main.files) + 1), NEW.path, NEW.language, NEW.symbol_count, NEW.last_modified, NEW.mtime_ms, NEW.stale);
+    VALUES (coalesce((SELECT rowid FROM main.files WHERE path = NEW.path), max((SELECT ifnull(max(rowid), 0) FROM main.files), (SELECT ifnull(max(rowid), 0) FROM ovbase.files), 1099511627776) + 1), NEW.path, NEW.language, NEW.symbol_count, NEW.last_modified, NEW.mtime_ms, NEW.stale);
 END;
 CREATE TEMP TRIGGER overlay_files_delete INSTEAD OF DELETE ON files BEGIN
   INSERT INTO main.files(rowid, path, language, symbol_count, last_modified, mtime_ms, stale)
@@ -96,27 +96,79 @@ pub fn attach(conn: &Connection, db_path: &std::path::Path) -> Result<bool> {
     let Some(base) = base_of(conn)? else {
         return Ok(false);
     };
-    if !std::path::Path::new(&base).exists() {
-        return Err(StoreError {
-            sqlite_code: Some(SQLITE_CANTOPEN),
-            message: format!(
-                "index at {} is an overlay on {}, which no longer exists; run index_folder on the worktree",
-                db_path.display(),
-                base
-            ),
-        });
+    let missing = |why: String| StoreError {
+        sqlite_code: Some(SQLITE_CANTOPEN),
+        message: format!(
+            "index at {} is an overlay on {}, which {}; run index_folder on the worktree",
+            db_path.display(),
+            base,
+            why
+        ),
+    };
+    // Read-only, so a base that vanished is never re-created empty (`readOnlyUri` in overlay.ts).
+    if let Err(e) = conn.execute("ATTACH DATABASE ?1 AS ovbase", [read_only_uri(&base)]) {
+        return Err(missing(format!("cannot be opened ({e})")));
     }
-    conn.execute("ATTACH DATABASE ?1 AS ovbase", [&base])?;
-    if let Err(e) = conn.execute_batch(OVERLAY_ATTACH_SQL) {
-        let _ = conn.execute_batch("DETACH DATABASE ovbase");
-        return Err(e.into());
+    if let Err(e) = check_base_and_install(conn) {
+        let _ = conn.execute_batch(
+            "DROP VIEW IF EXISTS temp.symbols; DROP VIEW IF EXISTS temp.files; DETACH DATABASE ovbase;",
+        );
+        return Err(match e {
+            BaseFault::Shape(why) => missing(why.to_string()),
+            BaseFault::Sql(e) => e,
+        });
     }
     Ok(true)
 }
 
+enum BaseFault {
+    Shape(&'static str),
+    Sql(StoreError),
+}
+
+impl From<rusqlite::Error> for BaseFault {
+    fn from(e: rusqlite::Error) -> Self {
+        BaseFault::Sql(e.into())
+    }
+}
+
+/// The base must be a plain index; a base that is itself an overlay would merge past its masks.
+fn check_base_and_install(conn: &Connection) -> std::result::Result<(), BaseFault> {
+    let mut stmt = conn.prepare("SELECT name FROM ovbase.sqlite_master WHERE type = 'table'")?;
+    let tables: Vec<String> = stmt
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let has = |name: &str| tables.iter().any(|t| t == name);
+    if !has("symbols") || !has("files") {
+        return Err(BaseFault::Shape("is not an index"));
+    }
+    if has("meta") {
+        let nested: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM ovbase.meta WHERE key = ?1)",
+            [OVERLAY_BASE_KEY],
+            |r| r.get(0),
+        )?;
+        if nested {
+            return Err(BaseFault::Shape("is itself an overlay"));
+        }
+    }
+    conn.execute_batch(OVERLAY_ATTACH_SQL)?;
+    Ok(())
+}
+
+/// `file:` URI with `mode=ro`, percent-escaping what a URI would otherwise read as syntax.
+fn read_only_uri(path: &str) -> String {
+    let escaped = path
+        .replace('%', "%25")
+        .replace('?', "%3f")
+        .replace('#', "%23");
+    format!("file:{escaped}?mode=ro")
+}
+
+/// Whether this connection reads through the overlay views (attached, and not yet made plain).
 pub fn is_overlay(conn: &Connection) -> Result<bool> {
     Ok(conn.query_row(
-        "SELECT EXISTS (SELECT 1 FROM pragma_database_list WHERE name = 'ovbase')",
+        "SELECT EXISTS (SELECT 1 FROM temp.sqlite_master WHERE type = 'view' AND name = 'symbols')",
         [],
         |r| r.get(0),
     )?)
@@ -146,7 +198,8 @@ pub fn count_rows(conn: &Connection, table: &str) -> Result<i64> {
 }
 
 /// Empty the index before a whole-index write (`clearIndexRows` in overlay.ts, statement for
-/// statement): on an overlay, mask every base path, drop the overlay's rows and the base reference.
+/// statement): on an overlay, mask every base path, drop the overlay's rows, the base reference and
+/// this connection's views.
 pub fn clear_rows(conn: &Connection) -> Result<()> {
     if !is_overlay(conn)? {
         conn.execute_batch("DELETE FROM symbols; DELETE FROM files;")?;
@@ -162,6 +215,8 @@ pub fn clear_rows(conn: &Connection) -> Result<()> {
         "DELETE FROM main.meta WHERE key IN (?1, ?2)",
         [OVERLAY_BASE_KEY, OVERLAY_BASE_PREFIX_KEY],
     )?;
+    // The rest of this write runs on the plain tables, not through a trigger per row.
+    conn.execute_batch("DROP VIEW temp.symbols; DROP VIEW temp.files;")?;
     Ok(())
 }
 
@@ -329,15 +384,22 @@ mod tests {
         let c = crate::store::open(&ov).unwrap();
         assert!(!is_overlay(&c).unwrap());
         assert_eq!(count_rows(&c, "files").unwrap(), 1);
+        // Written to the plain tables, not through the triggers (which number rows from 2^40).
+        let max_rowid: i64 = c
+            .query_row("SELECT max(rowid) FROM symbols", [], |r| r.get(0))
+            .unwrap();
+        assert!(max_rowid < 1_099_511_627_776, "{max_rowid}");
     }
 
-    // Bug it catches: a deleted base answered as an empty (or overlay-only) index.
+    // Bug it catches: a deleted base answered as an empty (or overlay-only) index, or re-created.
     #[test]
     fn a_missing_base_is_cantopen_not_a_smaller_index() {
         let (_d, base, ov) = overlay();
         std::fs::remove_file(&base).unwrap();
         let err = crate::store::open(&ov).unwrap_err();
         assert_eq!(err.sqlite_code, Some(SQLITE_CANTOPEN));
-        assert!(err.message.contains("no longer exists"), "{}", err.message);
+        assert!(err.message.contains("cannot be opened"), "{}", err.message);
+        // A plain ATTACH would have created it empty, and every later open would take that for the base.
+        assert!(!base.exists());
     }
 }

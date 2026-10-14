@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { IndexStorageError } from "./errors.js";
 import { INSERT_FILE_SQL } from "./rows.js";
@@ -19,8 +18,9 @@ import { INSERT_FILE_SQL } from "./rows.js";
  * rowid and masks the path; after that every statement acts on `main` alone, so a DELETE, an INSERT
  * and the order of rows behave exactly as on a plain table (tests/storage/sqlite-overlay.test.ts). A
  * write of the file row alone copies and masks only the file row (`overlay_masked_files`), so
- * recording a worktree's own mtimes does not copy its symbols. New rows get rowids from OVERLAY_ROWID_BASE up, above any base
- * rowid, so the two ranges never collide and `ORDER BY rowid` still puts new rows last.
+ * recording a worktree's own mtimes does not copy its symbols. New rows get rowids above both the
+ * base's largest and OVERLAY_ROWID_BASE, so the ranges never collide and `ORDER BY rowid` still puts
+ * new rows last.
  *
  * Constraints the views are shaped by (measurements in CLAUDE.md):
  *  - Every column is passed through raw. A computed column (the obvious way to rewrite `id`)
@@ -36,7 +36,7 @@ import { INSERT_FILE_SQL } from "./rows.js";
  * the two copies differ.
  */
 
-/** First rowid an overlay assigns to a row of its own. Above every base rowid, below 2^53. */
+/** Lowest rowid an overlay assigns to a row of its own. */
 export const OVERLAY_ROWID_BASE = 1_099_511_627_776;
 
 /** meta key holding the absolute path of the base database. Present exactly on an overlay. */
@@ -72,7 +72,7 @@ CREATE TEMP TRIGGER overlay_symbols_insert INSTEAD OF INSERT ON symbols BEGIN
     FROM ovbase.files WHERE path = NEW.file AND NOT EXISTS (SELECT 1 FROM main.overlay_masked WHERE path = NEW.file) AND NOT EXISTS (SELECT 1 FROM main.overlay_masked_files WHERE path = NEW.file);
   INSERT OR IGNORE INTO main.overlay_masked(path) VALUES (NEW.file);
   INSERT INTO main.symbols(rowid, id, file, name, kind, start_line, end_line, start_col, end_col, start_byte, end_byte, signature, docstring, source, parent, is_async, is_exported, extras)
-    VALUES ((SELECT max(ifnull(max(rowid), 0), 1099511627776) FROM main.symbols) + 1, NEW.id, NEW.file, NEW.name, NEW.kind, NEW.start_line, NEW.end_line, NEW.start_col, NEW.end_col, NEW.start_byte, NEW.end_byte, NEW.signature, NEW.docstring, NEW.source, NEW.parent, NEW.is_async, NEW.is_exported, NEW.extras);
+    VALUES (max((SELECT ifnull(max(rowid), 0) FROM main.symbols), (SELECT ifnull(max(rowid), 0) FROM ovbase.symbols), 1099511627776) + 1, NEW.id, NEW.file, NEW.name, NEW.kind, NEW.start_line, NEW.end_line, NEW.start_col, NEW.end_col, NEW.start_byte, NEW.end_byte, NEW.signature, NEW.docstring, NEW.source, NEW.parent, NEW.is_async, NEW.is_exported, NEW.extras);
 END;
 CREATE TEMP TRIGGER overlay_symbols_delete INSTEAD OF DELETE ON symbols BEGIN
   INSERT INTO main.symbols(rowid, id, file, name, kind, start_line, end_line, start_col, end_col, start_byte, end_byte, signature, docstring, source, parent, is_async, is_exported, extras)
@@ -90,7 +90,7 @@ CREATE TEMP TRIGGER overlay_files_insert INSTEAD OF INSERT ON files BEGIN
     FROM ovbase.files WHERE path = NEW.path AND NOT EXISTS (SELECT 1 FROM main.overlay_masked WHERE path = NEW.path) AND NOT EXISTS (SELECT 1 FROM main.overlay_masked_files WHERE path = NEW.path);
   INSERT OR IGNORE INTO main.overlay_masked_files(path) VALUES (NEW.path);
   INSERT OR REPLACE INTO main.files(rowid, path, language, symbol_count, last_modified, mtime_ms, stale)
-    VALUES (coalesce((SELECT rowid FROM main.files WHERE path = NEW.path), (SELECT max(ifnull(max(rowid), 0), 1099511627776) FROM main.files) + 1), NEW.path, NEW.language, NEW.symbol_count, NEW.last_modified, NEW.mtime_ms, NEW.stale);
+    VALUES (coalesce((SELECT rowid FROM main.files WHERE path = NEW.path), max((SELECT ifnull(max(rowid), 0) FROM main.files), (SELECT ifnull(max(rowid), 0) FROM ovbase.files), 1099511627776) + 1), NEW.path, NEW.language, NEW.symbol_count, NEW.last_modified, NEW.mtime_ms, NEW.stale);
 END;
 CREATE TEMP TRIGGER overlay_files_delete INSTEAD OF DELETE ON files BEGIN
   INSERT INTO main.files(rowid, path, language, symbol_count, last_modified, mtime_ms, stale)
@@ -105,48 +105,60 @@ END;
 const INSERT_FILE_OVERLAY_SQL =
   "INSERT INTO files (path, language, symbol_count, last_modified, mtime_ms, stale) VALUES (?,?,?,?,?,?)";
 
-const overlayConnections = new WeakSet<DatabaseSyncType>();
-
 function metaValue(db: DatabaseSyncType, key: string): string | undefined {
   const row = db.prepare("SELECT value FROM main.meta WHERE key = ?").get(key) as { value: string } | undefined;
   return row?.value;
 }
 
+/** `mode=ro`: a missing file is an error, not a new empty database, and the base stays unwritable. */
+export function readOnlyUri(path: string): string {
+  return `file:${path.replace(/%/g, "%25").replace(/\?/g, "%3f").replace(/#/g, "%23")}?mode=ro`;
+}
+
+function baseMissing(dbPath: string, base: string, why: string): IndexStorageError {
+  return new IndexStorageError(
+    `Index at ${dbPath} is an overlay on ${base}, which ${why}. Run index_folder on the worktree to rebuild it.`,
+    "OVERLAY_BASE_MISSING",
+    dbPath,
+  );
+}
+
 /**
  * Attach the base and install the views, if this database is an overlay. Returns whether it is.
- *
- * Must run after the schema exists and outside any transaction (ATTACH refuses to run inside one).
- * A missing base is an error, not an empty index: the overlay alone holds a few files, and serving
- * it as the whole repository would answer every query confidently and wrongly.
+ * Runs outside any transaction (ATTACH refuses one). A base that cannot be opened or is not a plain
+ * index is an error: the overlay alone would answer every query confidently and wrongly.
  */
 export function attachOverlay(db: DatabaseSyncType, dbPath: string): boolean {
   const base = metaValue(db, OVERLAY_BASE_KEY);
   if (base === undefined) return false;
-  if (!existsSync(base)) {
-    throw new IndexStorageError(
-      `Index at ${dbPath} is an overlay on ${base}, which no longer exists. Run index_folder on the worktree to rebuild it.`,
-      "OVERLAY_BASE_MISSING",
-      dbPath,
-    );
-  }
-  db.prepare("ATTACH DATABASE ? AS ovbase").run(base);
   try {
+    db.prepare("ATTACH DATABASE ? AS ovbase").run(readOnlyUri(base));
+  } catch (err) {
+    throw baseMissing(dbPath, base, `cannot be opened (${err instanceof Error ? err.message : String(err)})`);
+  }
+  try {
+    const tables = new Set((db.prepare("SELECT name FROM ovbase.sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>)
+      .map((r) => r.name));
+    if (!tables.has("symbols") || !tables.has("files")) throw baseMissing(dbPath, base, "is not an index");
+      if (tables.has("meta") && db.prepare("SELECT 1 AS x FROM ovbase.meta WHERE key = ?").get(OVERLAY_BASE_KEY)) {
+      throw baseMissing(dbPath, base, "is itself an overlay");
+    }
     db.exec(OVERLAY_ATTACH_SQL);
   } catch (err) {
-    try { db.exec("DETACH DATABASE ovbase"); } catch { /* the original fault is the one worth reporting */ }
+    try { db.exec("DROP VIEW IF EXISTS temp.symbols; DROP VIEW IF EXISTS temp.files; DETACH DATABASE ovbase"); } catch { /* the original fault is the one worth reporting */ }
     throw err;
   }
-  overlayConnections.add(db);
   return true;
 }
 
+/** Whether this connection reads through the overlay views (attached, and not yet made plain). */
 export function isOverlayConnection(db: DatabaseSyncType): boolean {
-  return overlayConnections.has(db);
+  return db.prepare("SELECT 1 AS x FROM temp.sqlite_master WHERE type = 'view' AND name = 'symbols'").get() !== undefined;
 }
 
 /** The statement a writer uses for one file row on this connection. */
 export function insertFileSqlFor(db: DatabaseSyncType): string {
-  return overlayConnections.has(db) ? INSERT_FILE_OVERLAY_SQL : INSERT_FILE_SQL;
+  return isOverlayConnection(db) ? INSERT_FILE_OVERLAY_SQL : INSERT_FILE_SQL;
 }
 
 /**
@@ -154,7 +166,7 @@ export function insertFileSqlFor(db: DatabaseSyncType): string {
  * plus the base's, minus the base rows the masks hide. Each part uses an index.
  */
 export function countIndexRows(db: DatabaseSyncType, table: "symbols" | "files"): number {
-  if (!overlayConnections.has(db)) {
+  if (!isOverlayConnection(db)) {
     return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
   }
   const hidden = table === "symbols"
@@ -170,13 +182,12 @@ export function countIndexRows(db: DatabaseSyncType, table: "symbols" | "files")
 /**
  * Empty the index before a whole-index write.
  *
- * On an overlay every base path is masked and the overlay's own rows go: the rows written next are
- * then the whole index, and a connection that attached the views earlier still sees exactly them.
- * The base reference is dropped too, so the database is a plain index from the next open on and
- * the base can be collected once nothing else points at it.
+ * On an overlay every base path is masked (other connections then see only the rows written next)
+ * and the base reference goes, so the database opens plain from now on. This connection drops its
+ * views, so the write runs on the plain tables; a rollback restores them.
  */
 export function clearIndexRows(db: DatabaseSyncType): void {
-  if (!overlayConnections.has(db)) {
+  if (!isOverlayConnection(db)) {
     db.exec("DELETE FROM symbols");
     db.exec("DELETE FROM files");
     return;
@@ -186,6 +197,7 @@ export function clearIndexRows(db: DatabaseSyncType): void {
   db.exec("DELETE FROM main.symbols");
   db.exec("DELETE FROM main.files");
   db.prepare("DELETE FROM main.meta WHERE key IN (?, ?)").run(OVERLAY_BASE_KEY, OVERLAY_BASE_PREFIX_KEY);
+  db.exec("DROP VIEW temp.symbols; DROP VIEW temp.files");
 }
 
 /**
@@ -194,7 +206,7 @@ export function clearIndexRows(db: DatabaseSyncType): void {
  */
 export function indexIdPrefixes(db: DatabaseSyncType, repo: string): string[] {
   const own = `${repo}:`;
-  if (!overlayConnections.has(db)) return [own];
+  if (!isOverlayConnection(db)) return [own];
   const base = metaValue(db, OVERLAY_BASE_PREFIX_KEY);
   return base === undefined || base === own ? [own] : [own, base];
 }

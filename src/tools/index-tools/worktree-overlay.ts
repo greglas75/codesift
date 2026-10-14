@@ -15,9 +15,9 @@
  * uncommitted files at snapshot time are recorded in the base (`base_dirty`) — content no commit
  * diff mentions, which every overlay on that base must revisit.
  */
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, readdir, rename, stat, unlink } from "node:fs/promises";
+import { chmod, link, readdir, stat, unlink, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { loadSqliteCtor } from "../../storage/sqlite/runtime.js";
@@ -28,6 +28,7 @@ import {
   OVERLAY_MASK_TABLE_SQL,
   attachOverlay,
   countIndexRows,
+  readOnlyUri,
 } from "../../storage/sqlite/overlay.js";
 import { parsePorcelainZ } from "./worktree-seed.js";
 import { runGit } from "../git-exec.js";
@@ -78,10 +79,21 @@ function setMeta(db: DatabaseSyncType, key: string, value: string): void {
     .run(key, value);
 }
 
+/**
+ * Rename an id prefix in `id` and in `parent`, which holds the parent symbol's id. By prefix length,
+ * not replace(): a path may contain the old name.
+ */
+function renamePrefix(db: DatabaseSyncType, from: string, to: string, schema = ""): void {
+  for (const column of ["id", "parent"]) {
+    db.prepare(`UPDATE ${schema}symbols SET ${column} = ? || substr(${column}, ?) WHERE substr(${column}, 1, ?) = ?`)
+      .run(to, from.length + 1, from.length, from);
+  }
+}
+
 /** The base an overlay database points at, or null for a plain index. */
 export async function overlayBaseOf(dbPath: string): Promise<string | null> {
   const Db = await sqlite();
-  const db = new Db(`file:${dbPath}?mode=ro`, { open: true });
+  const db = new Db(readOnlyUri(dbPath), { open: true });
   try {
     const hasMeta = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get();
     return hasMeta ? (meta(db, OVERLAY_BASE_KEY) ?? null) : null;
@@ -90,10 +102,13 @@ export async function overlayBaseOf(dbPath: string): Promise<string | null> {
   }
 }
 
-/** The donor's uncommitted and untracked paths (both sides of a rename). Empty when git cannot say. */
+/**
+ * The donor's uncommitted and untracked paths (both sides of a rename). Throws when git cannot say:
+ * the list is baked into an immutable base, and an empty one would leave every overlay on it holding
+ * the donor's edits as if they were this tree's content.
+ */
 async function dirtyPaths(root: string): Promise<string[]> {
-  const out = await runGit(["status", "--porcelain", "-z", "--untracked-files=all"], { cwd: root, timeout: 15_000 })
-    .catch(() => null);
+  const out = await runGit(["status", "--porcelain", "-z", "--untracked-files=all"], { cwd: root, timeout: 15_000 });
   const paths = new Set<string>();
   for (const entry of parsePorcelainZ(out)) {
     paths.add(entry.path);
@@ -131,7 +146,7 @@ export async function baseForDonor(
   const donorBase = await overlayBaseOf(donorDb);
   if (donorBase !== null) {
     if (!existsSync(donorBase)) throw new Error(`donor ${donor.name} is an overlay on a missing base`);
-    const db = new Db(`file:${donorBase}?mode=ro`, { open: true });
+    const db = new Db(readOnlyUri(donorBase), { open: true });
     try {
       return { base: readBase(donorBase, db), donorIsOverlay: true };
     } finally {
@@ -142,7 +157,11 @@ export async function baseForDonor(
   const key = createHash("sha1").update(`${familyName}\0${donor.commit ?? ""}\0${donorDb}`).digest("hex").slice(0, 16);
   const path = join(dataDir, `base-${key}.db`);
   if (existsSync(path)) {
-    const db = new Db(`file:${path}?mode=ro`, { open: true });
+    // A reused base is as new as its newest user: `prune` spares a base for an hour after this, which
+    // covers the seed that is about to point an overlay at it.
+    const now = new Date();
+    await utimes(path, now, now).catch(() => undefined);
+    const db = new Db(readOnlyUri(path), { open: true });
     try {
       return { base: readBase(path, db), donorIsOverlay: false };
     } finally {
@@ -150,14 +169,14 @@ export async function baseForDonor(
     }
   }
 
-  const temp = `${path}.creating.${process.pid}`;
+  const temp = `${path}.creating.${process.pid}.${randomBytes(4).toString("hex")}`;
   // Before AND after the copy: a file the donor started editing during the copy may be in the
   // snapshot, and must then be revisited like any other uncommitted file.
   const dirtyBefore = await dirtyPaths(donor.root);
   try {
     if (existsSync(temp)) await unlink(temp);
     // Read-only source and a consistent snapshot: the daemon and other agents may be writing it.
-    const source = new Db(`file:${donorDb}?mode=ro`, { open: true });
+    const source = new Db(readOnlyUri(donorDb), { open: true });
     try {
       source.exec(`VACUUM INTO ${sqlLiteral(temp)}`);
     } finally {
@@ -169,11 +188,7 @@ export async function baseForDonor(
     try {
       copy.exec("BEGIN IMMEDIATE");
       const from = `${donor.name}:`;
-      if (from !== prefix) {
-        // By prefix length, not replace(): a path may contain the donor's name.
-        copy.prepare("UPDATE symbols SET id = ? || substr(id, ?) WHERE substr(id, 1, ?) = ?")
-          .run(prefix, from.length + 1, from.length, from);
-      }
+      if (from !== prefix) renamePrefix(copy, from, prefix);
       setMeta(copy, "repo", familyName);
       setMeta(copy, OVERLAY_BASE_PREFIX_KEY, prefix);
       setMeta(copy, BASE_COMMIT_KEY, donor.commit ?? "");
@@ -189,14 +204,17 @@ export async function baseForDonor(
       copy.close();
     }
     await chmod(temp, 0o444);
-    // Another seed may have published the same base meanwhile; theirs is as good as ours.
-    if (existsSync(path)) await unlink(temp);
-    else await rename(temp, path);
+    // Another seed may have published the same base meanwhile: theirs stays, since overlays may
+    // already read it. link() never replaces an existing file, where rename() would.
+    await link(temp, path).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== "EEXIST") throw err;
+    });
+    await unlink(temp);
   } catch (err) {
     await unlink(temp).catch(() => undefined);
     throw err;
   }
-  const db = new Db(`file:${path}?mode=ro`, { open: true });
+  const db = new Db(readOnlyUri(path), { open: true });
   try {
     return { base: readBase(path, db), donorIsOverlay: false };
   } finally {
@@ -226,7 +244,7 @@ export async function writeOverlayIndex(
   if (existsSync(targetTemp)) await unlink(targetTemp);
 
   if (opts.donorIsOverlay) {
-    const source = new Db(`file:${opts.donorDb}?mode=ro`, { open: true });
+    const source = new Db(readOnlyUri(opts.donorDb), { open: true });
     try {
       source.exec(`VACUUM INTO ${sqlLiteral(targetTemp)}`);
     } finally {
@@ -240,10 +258,7 @@ export async function writeOverlayIndex(
     db.exec(OVERLAY_MASK_TABLE_SQL);
     db.exec("BEGIN IMMEDIATE");
     if (opts.donorIsOverlay) {
-      const from = `${opts.donorName}:`;
-      const to = `${opts.worktreeName}:`;
-      db.prepare("UPDATE main.symbols SET id = ? || substr(id, ?) WHERE substr(id, 1, ?) = ?")
-        .run(to, from.length + 1, from.length, from);
+      renamePrefix(db, `${opts.donorName}:`, `${opts.worktreeName}:`, "main.");
     } else {
       db.exec(`ATTACH DATABASE ${sqlLiteral(opts.base.path)} AS seedbase`);
       // The base's own bookkeeping (its commit, dirty list, source) describes the base, not this index.
@@ -309,7 +324,7 @@ async function observeWorktreeMtimes(db: DatabaseSyncType, root: string): Promis
 export async function overlayIdPrefixOf(dbPath: string): Promise<string | null> {
   if (!existsSync(dbPath)) return null;
   const Db = await sqlite();
-  const db = new Db(`file:${dbPath}?mode=ro`, { open: true });
+  const db = new Db(readOnlyUri(dbPath), { open: true });
   try {
     const hasMeta = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'meta'").get();
     if (!hasMeta || meta(db, OVERLAY_BASE_KEY) === undefined) return null;
@@ -342,7 +357,7 @@ export async function removeIndexDatabase(dbPath: string): Promise<void> {
 }
 
 const BASE_MIN_AGE_MS = 60 * 60 * 1000;
-const BASE_TEMP = /^base-[0-9a-f]{16}\.db\.creating\.\d+$/;
+const BASE_TEMP = /^base-[0-9a-f]{16}\.db\.creating\.\d+(\.[0-9a-f]{8})?$/;
 
 /**
  * Remove the bases no overlay points at any more (and abandoned half-made ones), for `prune`.

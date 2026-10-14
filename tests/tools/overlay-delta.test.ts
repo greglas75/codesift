@@ -6,8 +6,12 @@ import { deltaFits, planOverlayDelta, storedEntryKey } from "../../src/tools/ind
 const BASE = "local/fam:";
 const WT = "local/fam@wt:";
 
+/** Each symbol's parent is a class in the same file, named by id like the symbol itself. */
 function sym(prefix: string, file: string, name: string, source = `function ${name}() {}`): CodeSymbol {
-  return { id: `${prefix}${file}:${name}:1`, repo: "local/fam@wt", name, kind: "function", file, start_line: 1, end_line: 2, source };
+  return {
+    id: `${prefix}${file}:${name}:1`, repo: "local/fam@wt", name, kind: "method", file, start_line: 1, end_line: 2, source,
+    parent: `${prefix}${file}:Owner:1`,
+  };
 }
 
 function entry(path: string, mtime: number, stale?: boolean): FileEntry {
@@ -34,9 +38,9 @@ function plan(walk: { parsed: CodeSymbol[]; parsedPaths: string[]; entries: File
 }
 
 describe("planOverlayDelta", () => {
-  // Bug it catches: a re-parse of unchanged content read as a change because its ids carry the
-  // worktree's prefix — every re-parsed file copied into the overlay, and search hits naming ids the
-  // store does not hold.
+  // Bug it catches: a re-parse of unchanged content read as a change because its ids (and its parent
+  // ids) carry the worktree's prefix — every re-parsed file copied into the overlay, and search hits
+  // naming ids the store does not hold.
   it("keeps the stored rows of a re-parsed file whose content did not change", () => {
     const p = plan({
       parsed: [sym(WT, "a.ts", "a")],

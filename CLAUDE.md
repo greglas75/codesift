@@ -208,8 +208,15 @@ short-circuited. They are observed during the seed (before the catch-up) and wri
 after its re-reads, skipping the files it re-read: written earlier, `index_file` in the catch-up saw a
 matching mtime and kept the donor's symbols for an uncommitted edit (found end to end, AP2).
 
-A missing base is `OVERLAY_BASE_MISSING` (TS) / `CANTOPEN` (Rust), never an empty index;
-`index_folder` discards such an overlay and seeds again. `prune` keeps a base while any `*.index.db`
+The base is ATTACHed as a read-only `file:` URI (`mode=ro`): a plain ATTACH re-creates a vanished base
+EMPTY (and every later open then takes it for the base) and leaves it writable to root. A base that
+cannot be opened, is not an index, or is itself an overlay is `OVERLAY_BASE_MISSING` (TS) /
+`CANTOPEN` (Rust), never an empty index; `index_folder` discards such an overlay and seeds again. New
+rows are numbered above the base's largest rowid as well as 2^40 (a former overlay used as a donor
+already has rows up there). A base is published with `link()`, never `rename()`, so a concurrent seed
+cannot replace one overlays already read; reusing a base touches its mtime so `prune`'s one-hour guard
+covers the seed in flight; and a donor whose `git status` fails gets no base at all (its dirty list
+would be baked in empty). The base renames `parent` ids along with `id`. `prune` keeps a base while any `*.index.db`
 points at it, for 1 h after it is written, and deletes nothing if an index database cannot be read.
 Vectors cloned into a seeded worktree are rebased to the BASE prefix (most rows carry it). The Rust
 store embeds the SQL — after changing it, rebuild the addon (`npm run build:native`).

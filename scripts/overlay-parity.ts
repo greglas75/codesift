@@ -12,6 +12,7 @@ import { copyFileSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { rename } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { loadSqliteCtor } from "../src/storage/sqlite/runtime.js";
 import { closeAllIndexDbs } from "../src/storage/sqlite/connection.js";
 import { loadIndexSqlite } from "../src/storage/sqlite/index-io.js";
@@ -30,6 +31,8 @@ if (!source) {
 }
 
 const dir = mkdtempSync(join(tmpdir(), "overlay-parity-"));
+// The donor's checkout: a base records its uncommitted files, and refuses when git cannot say.
+execFileSync("git", ["init", "-q"], { cwd: dir });
 const donor = join(dir, "aaaaaaaaaaaa.index.db");
 const plain = join(dir, "cccccccccccc.index.db");
 const overlay = join(dir, "bbbbbbbbbbbb.index.db");
@@ -65,10 +68,12 @@ try {
   const family = repo.split("@")[0]!;
   const wt = `${family}@overlay-parity`;
   const p = new Ctor(plain);
-  // The full copy as the old seed made it: the donor's rows under the worktree's meta. Ids keep the
-  // prefix the overlay's base gives them (the family), so the two compare row for row.
-  p.prepare("UPDATE symbols SET id = ? || substr(id, ?) WHERE substr(id, 1, ?) = ?")
-    .run(`${family}:`, repo.length + 2, repo.length + 1, `${repo}:`);
+  // The full copy: the donor's rows under the worktree's meta. Ids and parent ids carry the prefix the
+  // overlay's base gives them (the family), so the two compare row for row.
+  for (const column of ["id", "parent"]) {
+    p.prepare(`UPDATE symbols SET ${column} = ? || substr(${column}, ?) WHERE substr(${column}, 1, ?) = ?`)
+      .run(`${family}:`, repo.length + 2, repo.length + 1, `${repo}:`);
+  }
   p.prepare("UPDATE meta SET value = ? WHERE key = 'repo'").run(wt);
   p.prepare("UPDATE meta SET value = '/parity' WHERE key = 'root'").run();
   p.close();
