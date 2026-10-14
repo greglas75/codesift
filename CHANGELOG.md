@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-14
+
+A linked worktree's index stops being a full copy of its donor: it holds only the files it changed
+and reads the rest from a shared read-only base (802 MB → 15 MB per worktree on a 549k-symbol index).
+
 ### Changed
 
 - **A linked worktree's index is an overlay on a shared base, not a full copy of its donor.** The
@@ -13,6 +18,8 @@
   changed, so the overlay stays small; a re-walk that changed more than a quarter of the files writes
   a whole index and the database becomes a plain one. `prune` removes a base once no index points at
   it (`overlay_bases_kept` / `overlay_bases_removed`). Native ABI 27.
+  Writing through an overlay needs SQLite 3.53 (Node 24 or the native core); on Node 22 without the
+  core a worktree is indexed in full instead.
 
 ### Fixed
 
