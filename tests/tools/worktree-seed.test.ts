@@ -18,6 +18,10 @@ import { parsePorcelainZ, seedWorktreeIndexFromParent } from "../../src/tools/in
 import { resetConfigCache } from "../../src/config.js";
 import { getRepoName } from "../../src/storage/registry.js";
 import { canonicalPath } from "../../src/utils/worktree.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+import { HAS_OVERLAY_WRITES } from "../helpers/overlay-sqlite.js";
+
+const itWithOverlay = HAS_OVERLAY_WRITES ? it : it.skip;
 
 let dataDir: string;
 let parentRoot: string;
@@ -127,7 +131,7 @@ const WT_INDEX = () => join(dataDir, "bbbbbbbbbbbb.index.json");
 describe("seedWorktreeIndexFromParent", () => {
   // Bug it catches: the seed copying the donor's whole database again, or an overlay whose reads miss
   // the shared rows.
-  it("seeds an overlay that reads the parent's rows through a shared base", async () => {
+  itWithOverlay("seeds an overlay that reads the parent's rows through a shared base", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [
       ["src/a.ts", "a"],
       ["src/PARENT_NAME_MARKER-helpers.ts", "helper"],
@@ -166,7 +170,7 @@ describe("seedWorktreeIndexFromParent", () => {
 
   // Bug it catches: each worktree of one commit taking its own snapshot of the donor — the disk cost
   // the overlay exists to remove, merely moved into base files.
-  it("gives a second worktree of the same commit the same base", async () => {
+  itWithOverlay("gives a second worktree of the same commit the same base", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
     const head = git(["rev-parse", "HEAD"], parentRoot).trim();
     registry({
@@ -189,7 +193,7 @@ describe("seedWorktreeIndexFromParent", () => {
   // Bug it catches: a base reused after its donor cleaned up, with the donor's then-uncommitted
   // content still in it and nothing left to say so — the worktree would search a version of a file
   // that exists in no checkout.
-  it("revisits the files the base's donor had uncommitted, even after the donor committed nothing", async () => {
+  itWithOverlay("revisits the files the base's donor had uncommitted, even after the donor committed nothing", async () => {
     const head = git(["rev-parse", "HEAD"], parentRoot).trim();
     // The parent's index was taken while src/a.ts held uncommitted work.
     writeFileSync(join(parentRoot, "src", "a.ts"), "export function draft() {}\n");
@@ -220,7 +224,7 @@ describe("seedWorktreeIndexFromParent", () => {
 
   // Bug it catches: a seed from a sibling overlay that drops the sibling's own changes, or leaves them
   // under the sibling's name.
-  it("copies a sibling overlay's changes under the new worktree's name", async () => {
+  itWithOverlay("copies a sibling overlay's changes under the new worktree's name", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
     const parentHead = git(["rev-parse", "HEAD"], parentRoot).trim();
     registry({
@@ -252,7 +256,7 @@ describe("seedWorktreeIndexFromParent", () => {
     }
   });
 
-  it("records the PARENT's commit, not the worktree's HEAD", async () => {
+  itWithOverlay("records the PARENT's commit, not the worktree's HEAD", async () => {
     const parentCommit = git(["rev-parse", "HEAD"], parentRoot).trim();
     // Move the worktree on, so the two commits genuinely differ.
     writeFileSync(join(worktreeRoot, "src", "b.ts"), "export function b() {}\n");
@@ -365,7 +369,7 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
   });
 
-  it("drops the donor's untracked files from the seed during catch-up", async () => {
+  itWithOverlay("drops the donor's untracked files from the seed during catch-up", async () => {
     // The donor's index holds its working tree, not its commit: a file it has not committed was
     // copied in, and no commit diff mentions it. Left alone it stays searchable here — a symbol for a
     // file that does not exist in this tree.
@@ -396,7 +400,7 @@ describe("seedWorktreeIndexFromParent", () => {
 
   // Bug: without -z git QUOTES a path holding a space or a non-ASCII byte, so the donor's untracked
   // file matched nothing in this tree and its symbols stayed in the seeded index.
-  it("drops a donor file whose name git would quote", async () => {
+  itWithOverlay("drops a donor file whose name git would quote", async () => {
     const ghost = "src/ghost file é.ts";
     writeFileSync(join(parentRoot, ghost), "export function ghost() {}\n");
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"], [ghost, "ghost"]]);
@@ -416,7 +420,7 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(files).toEqual(["src/a.ts"]);
   });
 
-  it("takes vectors from the nearest checkout that HAS them when the index donor has none", async () => {
+  itWithOverlay("takes vectors from the nearest checkout that HAS them when the index donor has none", async () => {
     // Measured 2026-10-12: a fresh develop worktree seeded its index from a sibling 0 commits back
     // with no vectors, while one 60 commits back held all 462,980 — and got no vectors at all.
     const prevProvider = process.env["CODESIFT_EMBEDDING_PROVIDER"];
@@ -455,7 +459,7 @@ describe("seedWorktreeIndexFromParent", () => {
     }
   });
 
-  it("leaves no half-copied database when the parent index is empty", async () => {
+  itWithOverlay("leaves no half-copied database when the parent index is empty", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), []);
     registry({
       [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`) },
@@ -467,6 +471,20 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(result.reason).toMatch(/empty/);
     expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
     expect(existsSync(`${join(dataDir, "bbbbbbbbbbbb.index.db")}.seeding.${process.pid}`)).toBe(false);
+  });
+
+  // Bug it catches: a seed on a SQLite that refuses `main.` in a TEMP trigger (3.51, Node 22)
+  // writing an overlay no write can reach, or failing with "qualified table names are not allowed".
+  it.runIf(HAS_NODE_SQLITE && !HAS_OVERLAY_WRITES)("declines on a SQLite that cannot write through an overlay", async () => {
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
+    registry({
+      [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`) },
+    });
+
+    const result = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+
+    expect(result).toEqual({ seeded: false, reason: expect.stringMatching(/cannot write through an overlay/) });
+    expect(existsSync(join(dataDir, "bbbbbbbbbbbb.index.db"))).toBe(false);
   });
 });
 

@@ -101,6 +101,36 @@ CREATE TEMP TRIGGER overlay_files_delete INSTEAD OF DELETE ON files BEGIN
 END;
 `;
 
+/** The views alone: what a connection gets when its SQLite refuses the triggers. */
+const OVERLAY_VIEWS_SQL = OVERLAY_ATTACH_SQL.slice(0, OVERLAY_ATTACH_SQL.indexOf("CREATE TEMP TRIGGER"));
+
+const writesSupported = new WeakMap<object, boolean>();
+
+/**
+ * Whether this SQLite lets a TEMP trigger write to `main.<table>`, which every overlay write does.
+ * 3.51 (node:sqlite on Node 22) refuses it — "qualified table names are not allowed" — and 3.53
+ * (Node 24, the Rust store) accepts it. Without it no overlay is seeded and an overlay another
+ * process made opens with its views only: reads work, a whole-index write makes it plain.
+ */
+export function overlayWritesSupported(Ctor: typeof DatabaseSyncType): boolean {
+  const known = writesSupported.get(Ctor);
+  if (known !== undefined) return known;
+  const db = new Ctor(":memory:");
+  let supported = true;
+  try {
+    db.exec(
+      "CREATE TABLE t (x); CREATE TEMP VIEW v AS SELECT x FROM main.t;" +
+        " CREATE TEMP TRIGGER v_insert INSTEAD OF INSERT ON v BEGIN INSERT INTO main.t (x) VALUES (NEW.x); END;",
+    );
+  } catch {
+    supported = false;
+  } finally {
+    db.close();
+  }
+  writesSupported.set(Ctor, supported);
+  return supported;
+}
+
 /** A file row without the upsert clause SQLite refuses on a view; the trigger replaces in place. */
 const INSERT_FILE_OVERLAY_SQL =
   "INSERT INTO files (path, language, symbol_count, last_modified, mtime_ms, stale) VALUES (?,?,?,?,?,?)";
@@ -143,7 +173,7 @@ export function attachOverlay(db: DatabaseSyncType, dbPath: string): boolean {
       if (tables.has("meta") && db.prepare("SELECT 1 AS x FROM ovbase.meta WHERE key = ?").get(OVERLAY_BASE_KEY)) {
       throw baseMissing(dbPath, base, "is itself an overlay");
     }
-    db.exec(OVERLAY_ATTACH_SQL);
+    db.exec(overlayWritesSupported(db.constructor as typeof DatabaseSyncType) ? OVERLAY_ATTACH_SQL : OVERLAY_VIEWS_SQL);
   } catch (err) {
     try { db.exec("DROP VIEW IF EXISTS temp.symbols; DROP VIEW IF EXISTS temp.files; DETACH DATABASE ovbase"); } catch { /* the original fault is the one worth reporting */ }
     throw err;

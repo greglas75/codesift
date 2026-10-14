@@ -13,9 +13,10 @@ import { getFileEntry, getIndexPath, loadIndex } from "../../src/storage/index-s
 import { sqlitePathFor } from "../../src/storage/index-migration.js";
 import { closeAllIndexDbs } from "../../src/storage/sqlite/connection.js";
 import { OVERLAY_BASE_KEY } from "../../src/storage/sqlite/overlay.js";
-import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+import { HAS_OVERLAY_WRITES } from "../helpers/overlay-sqlite.js";
 
-const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
+// Node 22's SQLite cannot write through an overlay; the seed declines there instead.
+const describeWithOverlay = HAS_OVERLAY_WRITES ? describe : describe.skip;
 
 let work: string;
 let dataDir: string;
@@ -90,7 +91,7 @@ afterEach(() => {
   rmSync(work, { recursive: true, force: true });
 });
 
-describeWithSqlite("a seeded worktree overlay, re-walked", () => {
+describeWithOverlay("a seeded worktree overlay, re-walked", () => {
   // Bug it catches: this tree's mtimes recorded before the catch-up re-read its edits — `index_file`
   // then saw a matching mtime and kept the donor's symbols for a file the worktree had changed.
   it("indexes an uncommitted edit made before the first index", async () => {

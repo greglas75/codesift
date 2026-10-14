@@ -504,8 +504,15 @@ export async function indexFolder(
   const existing = await loadIndex(indexPath);
   // An overlay (worktree-overlay.ts) is written back as the files this walk changed, not as a whole
   // index — which would mask every base path and make it a full copy again (overlay-delta.ts).
+  // A SQLite that cannot write through the overlay (overlayWritesSupported) gets the whole write,
+  // which makes the index plain.
   const { overlayIdPrefixOf } = await import("./worktree-overlay.js");
-  const overlayBasePrefix = existing ? await overlayIdPrefixOf(sqlitePathFor(indexPath)) : null;
+  const { overlayWritesSupported } = await import("../../storage/sqlite/overlay.js");
+  const { loadSqliteCtor } = await import("../../storage/sqlite/runtime.js");
+  const SqliteCtor = existing ? await loadSqliteCtor() : null;
+  const overlayBasePrefix = existing && SqliteCtor && overlayWritesSupported(SqliteCtor)
+    ? await overlayIdPrefixOf(sqlitePathFor(indexPath))
+    : null;
   const mtimeMap = new Map<string, number>();
   if (existing) {
     for (const f of existing.files) {

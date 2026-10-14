@@ -23,9 +23,10 @@ import { findSymbolsByRequestedIdsSqlite } from "../../src/storage/sqlite/narrow
 import { OVERLAY_ATTACH_SQL, OVERLAY_BASE_KEY, OVERLAY_ROWID_BASE, attachOverlay } from "../../src/storage/sqlite/overlay.js";
 import { isIndexStorageError } from "../../src/storage/sqlite/errors.js";
 import { baseForDonor, writeOverlayIndex } from "../../src/tools/index-tools/worktree-overlay.js";
-import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
+import { HAS_OVERLAY_WRITES } from "../helpers/overlay-sqlite.js";
 
-const describeWithSqlite = HAS_NODE_SQLITE ? describe : describe.skip;
+// Node 22's SQLite cannot write through an overlay; the seed declines there instead.
+const describeWithOverlay = HAS_OVERLAY_WRITES ? describe : describe.skip;
 
 const FAMILY = "local/fam";
 const WT = "local/fam@wt";
@@ -140,7 +141,7 @@ describe("overlay SQL", () => {
   });
 });
 
-describeWithSqlite("an overlay index against the full copy it replaces", () => {
+describeWithOverlay("an overlay index against the full copy it replaces", () => {
   // Bug it catches: any read path that sees the overlay alone, the base alone, a masked file's old
   // rows, or rows out of the order a plain table keeps them in — and, with a donor whose rowids are
   // already high, a new row given a rowid a base row still holds.

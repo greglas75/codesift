@@ -70,7 +70,8 @@ async function repoWithChunksFor(chunked: string[], vectorFiles: string[] = FILE
   process.env["CODESIFT_OLLAMA_MODEL"] = "embeddinggemma";
   process.env["CODESIFT_OLLAMA_DIMENSIONS"] = "2";
   // Lite mode would refuse to hold any vectors at all; it was on only so indexing embedded nothing.
-  delete process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"];
+  // "0", not unset: unset turns it back on below 24 GB of RAM (a 16 GB CI runner).
+  process.env["CODESIFT_DISABLE_LOCAL_EMBEDDINGS"] = "0";
   await resetConfig();
   globalThis.fetch = (async (_url: string, init: { body: string }) => {
     const n = (JSON.parse(init.body).input as string[]).length;
