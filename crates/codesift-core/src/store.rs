@@ -124,6 +124,8 @@ pub(crate) fn open(db_path: &Path) -> Result<Connection> {
     )?;
     // Same wait as the TypeScript connections: a writer mid-commit is a reason to wait, not to fail.
     conn.busy_timeout(Duration::from_millis(5000))?;
+    // A worktree overlay reads (and writes) through its shared base — see overlay.rs.
+    crate::overlay::attach(&conn, db_path)?;
     Ok(conn)
 }
 
@@ -846,7 +848,8 @@ impl Writer {
         let conn = open(db_path)?;
         // IMMEDIATE takes the write lock up front: a deferred BEGIN that upgrades on its first write
         // can fail with BUSY without waiting, where this waits out busy_timeout like any writer.
-        conn.execute_batch("BEGIN IMMEDIATE; DELETE FROM symbols; DELETE FROM files;")?;
+        conn.execute_batch("BEGIN IMMEDIATE;")?;
+        crate::overlay::clear_rows(&conn)?;
         Ok(Writer {
             conn: Some(conn),
             db_path: db_path.to_path_buf(),
@@ -889,7 +892,12 @@ impl Writer {
 
     pub fn insert_files(&self, rows: &[FileRowIn]) -> Result<()> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare_cached(INSERT_FILE_SQL)?;
+        let sql = if crate::overlay::is_overlay(conn)? {
+            crate::overlay::INSERT_FILE_OVERLAY_SQL
+        } else {
+            INSERT_FILE_SQL
+        };
+        let mut stmt = conn.prepare_cached(sql)?;
         for r in rows {
             stmt.execute(rusqlite::params![
                 r.path,
@@ -959,8 +967,8 @@ pub fn index_meta(db_path: &Path) -> Result<Option<IndexMeta>> {
     let (Some(repo), Some(root)) = (read_meta(&conn, "repo")?, read_meta(&conn, "root")?) else {
         return Ok(None);
     };
-    let symbol_count: i64 = conn.query_row("SELECT COUNT(*) FROM symbols", [], |r| r.get(0))?;
-    let file_count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+    let symbol_count = crate::overlay::count_rows(&conn, "symbols")?;
+    let file_count = crate::overlay::count_rows(&conn, "files")?;
     Ok(Some(IndexMeta {
         repo,
         root,

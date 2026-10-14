@@ -1,6 +1,7 @@
 import type { CodeSymbol } from "../../types.js";
 import { openIndexDb, readMetaValue } from "./connection.js";
 import { rethrowOperational } from "./errors.js";
+import { indexIdPrefixes, isOverlayConnection } from "./overlay.js";
 import { rowToSymbol, type SymbolRow } from "./rows.js";
 import { COLUMNS_WITHOUT_SOURCE, MAX_BOUND_PARAMS, rowToSymbolNoSource } from "./queries.js";
 
@@ -83,6 +84,22 @@ export async function findSymbolsByRequestedIdsSqlite(
     if (requested.length === 0) return [];
 
     const columns = withSource ? "*" : COLUMNS_WITHOUT_SOURCE;
+    // An overlay holds two id prefixes (its base's and its own), and MIN/MAX over its view scans
+    // both branches. Its prefixes are known, so each request is tried with each — all on idx_symbols_id.
+    if (isOverlayConnection(db)) {
+      const candidates = new Set<string>();
+      for (const r of requested) {
+        candidates.add(r);
+        for (const prefix of indexIdPrefixes(db, repo)) candidates.add(prefix + r);
+      }
+      const rows: RowWithRid[] = [];
+      for (const ids of chunk([...candidates])) {
+        pushAll(rows, (db
+          .prepare(`SELECT rowid AS _rid, ${columns} FROM symbols WHERE id IN (${placeholders(ids.length)})`)
+          .all(...(ids as never[])) as unknown as RowWithRid[]));
+      }
+      return inRowidOrder(rows, repo, withSource);
+    }
     const bounds = db.prepare("SELECT MIN(id) AS lo, MAX(id) AS hi FROM symbols").get() as
       | { lo: string | null; hi: string | null }
       | undefined;

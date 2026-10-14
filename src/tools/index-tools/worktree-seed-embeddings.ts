@@ -187,7 +187,11 @@ export async function cloneVectorsFromNearestDonor(
   const best = await nearestDonor(rootPath, repoName, (c) => symbolVectorsCover(c.index_path, model, c.symbol_count, ownCount));
   if (!best) return { seeded: false, reason: "no indexed checkout of this repository has vectors covering its index" };
 
-  const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, repoName);
+  // An overlay's shared rows carry its base's prefix (worktree-overlay.ts); its vectors must too.
+  const { overlayIdPrefixOf } = await import("./worktree-overlay.js");
+  const { sqlitePathFor } = await import("../../storage/index-store.js");
+  const basePrefix = await overlayIdPrefixOf(sqlitePathFor(indexPath)).catch(() => null);
+  const result = await seedEmbeddingsFromDonor(best.index_path, best.name, indexPath, basePrefix?.slice(0, -1) ?? repoName);
   return { ...result, donor: best.name, distance: best.distance };
 }
 

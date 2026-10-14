@@ -5,6 +5,7 @@ import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { IndexStorageError, rethrowOperational } from "./errors.js";
 import { loadSqliteCtor } from "./runtime.js";
 import { MIGRATE_V1_TO_V2_SQL, SCHEMA_SQL, SCHEMA_VERSION } from "./schema.js";
+import { attachOverlay } from "./overlay.js";
 
 /**
  * Connection handling, schema creation, migration, and the `meta` key/value accessors.
@@ -182,6 +183,15 @@ async function openUncachedIndexDb(dbPath: string): Promise<DatabaseSyncType> {
     }
   }
 
+  // Last, outside any transaction (ATTACH refuses one), and after the schema and migration, which
+  // act on this file's own tables. A worktree overlay then reads through its base (overlay.ts).
+  try {
+    attachOverlay(db, dbPath);
+  } catch (err) {
+    try { db.close(); } catch { /* not cached yet — nothing else would ever close it */ }
+    rethrowOperational(err, dbPath);
+  }
+
   connections.set(dbPath, db);
   return db;
 }
@@ -273,6 +283,7 @@ export async function openReadConnection(dbPath: string): Promise<DatabaseSyncTy
   // it was missing here only because this connection is deliberately not cached.
   try {
     db.exec("PRAGMA busy_timeout = 5000");
+    attachOverlay(db, dbPath);
   } catch (err) {
     try { db.close(); } catch { /* already unusable — the leak is what we came to prevent */ }
     throw err;

@@ -501,6 +501,13 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
     } catch { /* skip unreadable/already-gone */ }
   }
 
+  // Worktree overlay bases (worktree-overlay.ts) outlive no overlay that points at them. They do not
+  // match `artifactPattern()`, so nothing above can touch one.
+  const { sweepUnreferencedBases } = await import("../tools/index-tools/worktree-overlay.js");
+  const bases = await sweepUnreferencedBases(dataDir, dryRun === true);
+  bytes += bases.freed_bytes;
+  files += bases.removed;
+
   // Checkpoint write-ahead logs that no longer have a writer.
   //
   // SQLite truncates a `-wal` when the LAST connection closes cleanly. This server's connections
@@ -551,6 +558,9 @@ async function handlePruneLocked(flags: Flags, registryPath: string): Promise<Re
   return {
     bm25_superseded_format: bm25Superseded,
     vectors_superseded_ndjson: vectorsSuperseded,
+    overlay_bases_kept: bases.kept,
+    overlay_bases_removed: bases.removed,
+    ...(bases.skipped_reason ? { overlay_bases_skipped: bases.skipped_reason } : {}),
     wal_checkpointed: walCheckpointed,
     wal_reclaimed_gb: +((walBefore - walAfter) / 1e9).toFixed(2),
     indeterminate_databases: indeterminate.length,

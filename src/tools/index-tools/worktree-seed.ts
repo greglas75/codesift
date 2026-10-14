@@ -51,6 +51,11 @@ export interface SeedResult {
   donor_root?: string;
   /** Commits between the donor's and this tree's HEAD, when the donor was found in its history. */
   donor_distance?: number;
+  /** Paths the catch-up must re-read: the base's donor had them uncommitted when it was taken. */
+  revisit?: string[];
+  /** This tree's mtimes where the donor's rows differ, observed before the catch-up; it writes the
+   *  ones it did not re-read (worktree-overlay.ts `observeWorktreeMtimes`). */
+  worktree_mtimes?: Map<string, number>;
   /** Symbol vectors cloned from the donor, or why none were. */
   embeddings?: { vectors: number } | { skipped: string };
   elapsed_ms?: number;
@@ -58,11 +63,6 @@ export interface SeedResult {
 
 /** How far back `HEAD`'s history is searched for a donor's commit. */
 const DONOR_HISTORY_DEPTH = 5_000;
-
-/** SQLite string literal. Double-quoting would make the path an IDENTIFIER and fail. */
-function sqlLiteral(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
 
 /**
  * Seed `worktreeRoot`'s index from its parent checkout's, if that is possible and safe.
@@ -249,60 +249,41 @@ export async function seedWorktreeIndexFromParent(
   }
 
   // Write to a temp sibling and rename, so an interrupted seed never leaves a half-copied database
-  // sitting at the path the registry is about to point at.
+  // sitting at the path the registry is about to point at. The copy is an OVERLAY on a shared base
+  // (worktree-overlay.ts).
   const tempDb = `${targetDb}.seeding.${process.pid}`;
+  let files = 0;
+  let symbols = 0;
+  let revisit: string[] = [];
+  let worktreeMtimes = new Map<string, number>();
+  let vectorPrefixName = worktreeName;
   try {
-    if (existsSync(tempDb)) await unlink(tempDb);
-
-    // Read-only source: this runs while the daemon and other agents may hold the parent open.
-    // VACUUM INTO takes a consistent snapshot and refuses to run inside a transaction, which is
-    // what makes it safe to point at a database somebody else is writing.
-    const source = new DatabaseSync(`file:${parentDb}?mode=ro`, { open: true });
-    try {
-      source.exec(`VACUUM INTO ${sqlLiteral(tempDb)}`);
-    } finally {
-      source.close();
-    }
-
-    const copy = new DatabaseSync(tempDb, { open: true });
-    let files = 0;
-    let symbols = 0;
-    try {
-      // A symbol id is `<repo>:<file>:<name>:<line>` (parser/symbol-utils.ts), so every id in the
-      // copy names the PARENT repo. Rewriting the prefix by length is exact where a `replace()`
-      // would not be: a file path may legitimately contain the parent's name as a substring.
-      //
-      // Safe as a bulk UPDATE because v2 dropped the PRIMARY KEY on `symbols.id` — ids are not
-      // unique (TypeScript's type and value namespaces put two on one line), so there is no
-      // conflict to resolve.
-      const oldPrefix = `${donor.name}:`;
-      const newPrefix = `${worktreeName}:`;
-      copy.exec("BEGIN IMMEDIATE");
-      copy.prepare("UPDATE symbols SET id = ? || substr(id, ?)").run(newPrefix, oldPrefix.length + 1);
-      copy.prepare("INSERT INTO meta (key, value) VALUES ('repo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run(worktreeName);
-      copy.prepare("INSERT INTO meta (key, value) VALUES ('root', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run(worktreeRoot);
-      copy.prepare("INSERT INTO meta (key, value) VALUES ('updated_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-        .run(String(Date.now()));
-      copy.exec("COMMIT");
-
-      files = (copy.prepare("SELECT COUNT(*) AS c FROM files").get() as { c: number }).c;
-      symbols = (copy.prepare("SELECT COUNT(*) AS c FROM symbols").get() as { c: number }).c;
-    } catch (err) {
-      try { copy.exec("ROLLBACK"); } catch { /* not in a transaction */ }
-      throw err;
-    } finally {
-      copy.close();
-    }
+    const { baseForDonor, writeOverlayIndex, removeIndexDatabase } = await import("./worktree-overlay.js");
+    const picked = await baseForDonor(parentDb, donor, parentName, config.dataDir);
+    ({ files, symbols, mtimes: worktreeMtimes } = await writeOverlayIndex(tempDb, {
+      donorDb: parentDb,
+      donorName: donor.name,
+      donorIsOverlay: picked.donorIsOverlay,
+      base: picked.base,
+      worktreeName,
+      worktreeRoot,
+    }));
+    // A donor that is an overlay already revisited its base's dirty files in its own catch-up, and
+    // its delta holds the result; a fresh overlay on a base has to do it here.
+    if (!picked.donorIsOverlay) revisit = picked.base.dirty;
+    // Base rows keep the base's id prefix, so cloned vectors must be rebased to it (see
+    // seedEmbeddingsFromDonor): a vector under the worktree's name would match none of them.
+    vectorPrefixName = picked.base.prefix.slice(0, -1);
 
     if (files === 0) {
       // An empty parent index is not worth seeding from, and would look like a successful index of
       // a repo with no files — indistinguishable from a walk that found nothing.
-      await unlink(tempDb).catch(() => undefined);
+      await removeIndexDatabase(tempDb);
       return { seeded: false, reason: "parent index is empty" };
     }
 
+    // A WAL left by an earlier database at this path would be replayed into the new one.
+    await removeIndexDatabase(targetDb);
     await rename(tempDb, targetDb);
 
     // `last_git_commit` is the parent's, deliberately: it is the commit the copied content
@@ -331,7 +312,7 @@ export async function seedWorktreeIndexFromParent(
       const { seedEmbeddingsFromDonor, hasSymbolEmbeddings, cloneVectorsFromNearestDonor } =
         await import("./worktree-seed-embeddings.js");
       const vectors = (await hasSymbolEmbeddings(donor.index_path))
-        ? await seedEmbeddingsFromDonor(donor.index_path, donor.name, worktreeIndexPath, worktreeName)
+        ? await seedEmbeddingsFromDonor(donor.index_path, donor.name, worktreeIndexPath, vectorPrefixName)
         : await cloneVectorsFromNearestDonor(
           worktreeRoot, worktreeName, worktreeIndexPath,
           (await import("../../search/semantic.js")).expectedEmbeddingModel(
@@ -348,12 +329,16 @@ export async function seedWorktreeIndexFromParent(
       symbols,
       seeded_at_commit: donor.commit,
       donor_root: donor.root,
+      ...(revisit.length > 0 ? { revisit } : {}),
+      ...(worktreeMtimes.size > 0 ? { worktree_mtimes: worktreeMtimes } : {}),
       ...(donor.distance !== undefined ? { donor_distance: donor.distance } : {}),
       ...(embeddings ? { embeddings } : {}),
       elapsed_ms: Date.now() - started,
     };
   } catch (err: unknown) {
     await unlink(tempDb).catch(() => undefined);
+    await unlink(`${tempDb}-wal`).catch(() => undefined);
+    await unlink(`${tempDb}-shm`).catch(() => undefined);
     const message = err instanceof Error ? err.message : String(err);
     return { seeded: false, reason: `copy failed: ${message}` };
   }
@@ -507,6 +492,11 @@ export async function catchUpSeededWorktree(
   /** The donor's working tree, when it was not this one. Its index holds its uncommitted edits and
    *  untracked files too — content no commit diff mentions — so those paths are revisited here. */
   donorRoot?: string,
+  /** More paths the seed's content may hold in a version no diff explains: the files the base's
+   *  donor had uncommitted when the base was taken (SeedResult.revisit). */
+  revisit?: readonly string[],
+  /** SeedResult.worktree_mtimes: written once the files that differ have been re-read. */
+  worktreeMtimes?: ReadonlyMap<string, number>,
 ): Promise<CatchUpResult> {
   const head = (await git(["rev-parse", "HEAD"], worktreeRoot))?.trim();
   if (!head) return { caught_up: false, reason: "not a git checkout" };
@@ -557,6 +547,12 @@ export async function catchUpSeededWorktree(
     }
   }
 
+  for (const path of revisit ?? []) {
+    if (changed.has(path) || removed.has(path)) continue;
+    if (existsSync(join(worktreeRoot, path))) changed.add(path);
+    else removed.add(path);
+  }
+
   for (const path of removed) changed.delete(path);
 
   const total = changed.size + removed.size;
@@ -596,6 +592,18 @@ export async function catchUpSeededWorktree(
       } catch {
         // Not in the index to begin with.
       }
+    }
+  }
+
+  // After the re-reads, never before: a recorded mtime matching the file makes `index_file` keep the
+  // stored (donor's) symbols. Failed files are skipped too — their stored rows are the donor's.
+  if (meta && worktreeMtimes && worktreeMtimes.size > 0) {
+    const reread = new Set([...changed, ...removed, ...failed]);
+    try {
+      const { setFileMtimes } = await import("../../storage/index-store.js");
+      await setFileMtimes(meta.index_path, [...worktreeMtimes].filter(([path]) => !reread.has(path)));
+    } catch {
+      // Only a cost: the next walk re-reads files whose mtime it cannot match.
     }
   }
 

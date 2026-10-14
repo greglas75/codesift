@@ -3,6 +3,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import type { CodeIndex, CodeSymbol, FileEntry } from "../types.js";
+import type { IndexDelta } from "./sqlite/accessors.js";
 import { atomicWriteFile } from "./_shared.js";
 import {
   findSymbolsSqlite,
@@ -16,6 +17,8 @@ import {
   saveIndexSqlite,
   saveIncrementalSqlite,
   removeFileFromIndexSqlite,
+  applyIndexDeltaSqlite,
+  setFileMtimesSqlite,
   getFileEntrySqlite,
   getDataVersion,
   classifyStorageError,
@@ -539,6 +542,31 @@ export async function saveIncremental(
     return;
   }
   return saveIncrementalJson(indexPath, updatedFile, newSymbols, fileEntry, jsonMutationIo);
+}
+
+/**
+ * Apply a re-walk as the files it changed (sqlite only; see `applyIndexDeltaSqlite`). Used for an
+ * overlay index, which a whole-index `saveIndex` would turn back into a full copy.
+ */
+export async function applyIndexDelta(indexPath: string, delta: IndexDelta): Promise<void> {
+  assertCanonicalIndexPath(indexPath);
+  await awaitExternalWriter(indexPath);
+  const dbPath = sqlitePathFor(indexPath);
+  await applyIndexDeltaSqlite(dbPath, delta);
+  invalidateIndexCache(dbPath);
+}
+
+/** Set the mtime of existing file rows (sqlite only; see `setFileMtimesSqlite`). */
+export async function setFileMtimes(
+  indexPath: string,
+  mtimes: ReadonlyArray<readonly [string, number]>,
+): Promise<number> {
+  assertCanonicalIndexPath(indexPath);
+  await awaitExternalWriter(indexPath);
+  const dbPath = sqlitePathFor(indexPath);
+  const written = await setFileMtimesSqlite(dbPath, mtimes);
+  invalidateIndexCache(dbPath);
+  return written;
 }
 
 /**

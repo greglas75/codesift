@@ -168,6 +168,52 @@ result, `index_file` refuses and prunes an ignored file (`excluded_by: ".gitigno
 to its native ignore list, and the partial-walk guard counts now-ignored old files as explained. Tracked
 files always stay; no git checkout, no change; `CODESIFT_RESPECT_GITIGNORE=0` turns it off.
 
+### A linked worktree's index is an overlay on a shared base (2026-10-14)
+
+On the sessions host every caretaker worktree of tgm-survey-platform held a **2.5 GB copy** of the
+same index (14 of them, 35 GB, ~35 GB more an hour) while each differed from its donor by a handful of
+files. The seed (`worktree-seed.ts`) used `VACUUM INTO` a full copy; now `worktree-overlay.ts` writes
+an OVERLAY and `storage/sqlite/overlay.ts` makes it read as one index:
+
+- **Base:** a plain donor is snapshotted ONCE per (family, donor commit, donor db) into
+  `base-<16hex>.db` beside the indexes — read-only (0444), `journal_mode=DELETE`, never written again.
+  Its meta records `base_commit` and `base_dirty` (the donor's git status around the copy), which every
+  overlay on it revisits in its catch-up. A donor that is itself an overlay hands over its base and its
+  small delta (ids renamed donor → worktree).
+- **Views:** on open (`attachOverlay` in TS, `overlay::attach` in Rust — same SQL, a test fails if the
+  copies differ) the base is ATTACHed as `ovbase` and TEMP views `symbols` / `files` merge it with
+  `main`. SQLite resolves unqualified names in `temp` first, so every reader and writer works unchanged.
+- **Copy-on-touch:** the first write to a path copies its base rows into `main` with the SAME rowid and
+  masks the path (`overlay_masked`); new rows get rowids from 2^40. A file row written ALONE (a new
+  mtime) masks only the file row (`overlay_masked_files`) — otherwise recording mtimes would copy every
+  file's symbols.
+
+Constraints the views are shaped by, each measured on a 548,954-symbol index: columns pass through raw
+(a computed `id` broke SQLite's rowid merge: a keyset page 2.8 → 236 ms, a full stream 28.7 s), so base
+rows keep the base's id prefix and `findSymbolsByRequestedIdsSqlite` tries both prefixes; aggregates
+are computed per branch (`countIndexRows`, 12 ms instead of 205); UPSERT on a view is refused, so the
+trigger does the upsert. Result: 5.2 MB instead of 802 MB, 0 diffs on every read path including the
+native call graph (`scripts/overlay-parity.ts`), `loadIndex` ~2.0 → ~2.1 s.
+
+**Two ways a worktree stops being an overlay, both deliberate:** a whole-index `saveIndex` (masks all
+base paths and drops `overlay_base`), and a re-walk that changed more than a quarter of the files
+(`deltaFits`). Any smaller re-walk goes through `planOverlayDelta` + `applyIndexDelta` — without that a
+second `index_folder` turned a 77 KB overlay into a 13 MB copy. A re-parsed file whose symbols match the
+stored ones ids aside keeps the STORED rows, in the index and in the BM25 build, so search hits name
+ids the store holds.
+
+**The seed records this tree's own mtimes, after the catch-up, never before.** The base carries the
+donor's mtimes, so without them every walk re-parsed the whole tree and `index_file` never
+short-circuited. They are observed during the seed (before the catch-up) and written by the catch-up
+after its re-reads, skipping the files it re-read: written earlier, `index_file` in the catch-up saw a
+matching mtime and kept the donor's symbols for an uncommitted edit (found end to end, AP2).
+
+A missing base is `OVERLAY_BASE_MISSING` (TS) / `CANTOPEN` (Rust), never an empty index;
+`index_folder` discards such an overlay and seeds again. `prune` keeps a base while any `*.index.db`
+points at it, for 1 h after it is written, and deletes nothing if an index database cannot be read.
+Vectors cloned into a seeded worktree are rebased to the BASE prefix (most rows carry it). The Rust
+store embeds the SQL — after changing it, rebuild the addon (`npm run build:native`).
+
 ### index_folder sanity check is now visible + self-healing (NEW)
 When a re-walk finds <50% of the previously indexed file count, index_folder keeps the old index — but now returns `status: "rejected_partial"` + `reason` + `hint` instead of silently echoing the old counts as success (pre-fix this skipped saveIndex AND registerRepo, so the repo could vanish from the registry while the tool reported OK). Before rejecting, it samples the old index's paths on disk: if ≥50% no longer exist (e.g. deleted `.worktrees/` swept by an older walker), the old index is treated as stale and the new one is accepted (auto-heal — breaks the poisoned-baseline deadlock where every honest reindex was rejected forever).
 

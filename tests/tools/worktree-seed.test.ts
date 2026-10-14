@@ -9,7 +9,7 @@
 // that relationship: what `findWorkingTree` reports, what the id prefix looks like, and what git
 // does and does not include in a diff. A mocked worktree would test the mock.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -71,6 +71,29 @@ function readRegistry(): Record<string, { root?: string; last_git_commit?: strin
   return JSON.parse(execFileSync("cat", [join(dataDir, "registry.json")], { encoding: "utf-8" })).repos;
 }
 
+/** Rows of the seeded index as every reader sees them: through the overlay's views. */
+async function viewRows<T>(sql: string, dbName = "bbbbbbbbbbbb.index.db"): Promise<T[]> {
+  const { loadSqliteCtor } = await import("../../src/storage/sqlite/runtime.js");
+  const { attachOverlay } = await import("../../src/storage/sqlite/overlay.js");
+  const Ctor = (await loadSqliteCtor())!;
+  const path = join(dataDir, dbName);
+  const db = new Ctor(path);
+  try {
+    attachOverlay(db, path);
+    return db.prepare(sql).all() as T[];
+  } finally {
+    db.close();
+  }
+}
+
+function baseFilesPath(): string {
+  return join(dataDir, baseFiles()[0]!);
+}
+
+function baseFiles(): string[] {
+  return readdirSync(dataDir).filter((n) => /^base-[0-9a-f]{16}\.db$/.test(n));
+}
+
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "codesift-seed-data-"));
   parentRoot = mkdtempSync(join(tmpdir(), "codesift-seed-parent-"));
@@ -102,9 +125,9 @@ afterEach(() => {
 const WT_INDEX = () => join(dataDir, "bbbbbbbbbbbb.index.json");
 
 describe("seedWorktreeIndexFromParent", () => {
-  it("copies the parent's index and makes every symbol id name the WORKTREE", async () => {
-    // One path deliberately CONTAINS the parent repo name, which a naive string replace would
-    // corrupt in the middle of the id.
+  // Bug it catches: the seed copying the donor's whole database again, or an overlay whose reads miss
+  // the shared rows.
+  it("seeds an overlay that reads the parent's rows through a shared base", async () => {
     makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [
       ["src/a.ts", "a"],
       ["src/PARENT_NAME_MARKER-helpers.ts", "helper"],
@@ -122,22 +145,111 @@ describe("seedWorktreeIndexFromParent", () => {
     expect(result.seeded).toBe(true);
     expect(result.files).toBe(2);
     expect(result.symbols).toBe(2);
-
-    const db = new DatabaseSync(`file:${join(dataDir, "bbbbbbbbbbbb.index.db")}?mode=ro`, { open: true });
-    const ids = (db.prepare("SELECT id FROM symbols ORDER BY id").all() as Array<{ id: string }>).map((r) => r.id);
-    const meta = Object.fromEntries(
-      (db.prepare("SELECT key, value FROM meta").all() as Array<{ key: string; value: string }>).map((r) => [r.key, r.value]),
-    );
-    db.close();
-
-    // ORDER BY id, and uppercase sorts before lowercase in ASCII.
+    // Shared rows keep the repository's prefix: rewriting ids in the view stops SQLite merging the
+    // two halves in rowid order (overlay.ts). The worktree's own rows carry its name.
+    const ids = (await viewRows<{ id: string }>("SELECT id FROM symbols ORDER BY id")).map((r) => r.id);
     expect(ids).toEqual([
-      `${WT_NAME}:src/PARENT_NAME_MARKER-helpers.ts:helper:1`,
-      `${WT_NAME}:src/a.ts:a:1`,
+      `${PARENT_NAME}:src/PARENT_NAME_MARKER-helpers.ts:helper:1`,
+      `${PARENT_NAME}:src/a.ts:a:1`,
     ]);
-    expect(ids.some((id) => id.startsWith(`${PARENT_NAME}:`))).toBe(false);
+    const meta = Object.fromEntries(
+      (await viewRows<{ key: string; value: string }>("SELECT key, value FROM meta")).map((r) => [r.key, r.value]),
+    );
     expect(meta["repo"]).toBe(WT_NAME);
     expect(meta["root"]).toBe(worktreeRoot);
+    const own = new DatabaseSync(`file:${join(dataDir, "bbbbbbbbbbbb.index.db")}?mode=ro`, { open: true });
+    const ownRows = (own.prepare("SELECT COUNT(*) AS n FROM symbols").get() as { n: number }).n;
+    own.close();
+    expect(ownRows).toBe(0);
+    expect(baseFiles()).toHaveLength(1);
+  });
+
+  // Bug it catches: each worktree of one commit taking its own snapshot of the donor — the disk cost
+  // the overlay exists to remove, merely moved into base files.
+  it("gives a second worktree of the same commit the same base", async () => {
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
+    const head = git(["rev-parse", "HEAD"], parentRoot).trim();
+    registry({
+      [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`), last_git_commit: head },
+    });
+    await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+    const second = join(parentRoot, "..", `codesift-seed-wt2-${process.pid}`);
+    git(["worktree", "add", "-q", "-b", "task2", second], parentRoot);
+    try {
+      const result = await seedWorktreeIndexFromParent(second, getRepoName(second), join(dataDir, "dddddddddddd.index.json"));
+      expect(result.seeded).toBe(true);
+      expect(baseFiles()).toHaveLength(1);
+      expect((await viewRows<{ name: string }>("SELECT name FROM symbols", "dddddddddddd.index.db")).map((r) => r.name)).toEqual(["a"]);
+    } finally {
+      try { git(["worktree", "remove", "--force", second], parentRoot); } catch { /* already gone */ }
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  // Bug it catches: a base reused after its donor cleaned up, with the donor's then-uncommitted
+  // content still in it and nothing left to say so — the worktree would search a version of a file
+  // that exists in no checkout.
+  it("revisits the files the base's donor had uncommitted, even after the donor committed nothing", async () => {
+    const head = git(["rev-parse", "HEAD"], parentRoot).trim();
+    // The parent's index was taken while src/a.ts held uncommitted work.
+    writeFileSync(join(parentRoot, "src", "a.ts"), "export function draft() {}\n");
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "draft"]]);
+    registry({
+      [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`), last_git_commit: head },
+    });
+    await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+    git(["checkout", "--", "src/a.ts"], parentRoot);
+
+    const second = join(parentRoot, "..", `codesift-seed-wt3-${process.pid}`);
+    git(["worktree", "add", "-q", "-b", "task3", second], parentRoot);
+    try {
+      const name = getRepoName(second);
+      const seed = await seedWorktreeIndexFromParent(second, name, join(dataDir, "eeeeeeeeeeee.index.json"));
+      expect(seed.revisit).toContain("src/a.ts");
+      const { catchUpSeededWorktree } = await import("../../src/tools/index-tools/worktree-seed.js");
+      const caught = await catchUpSeededWorktree(second, name, seed.seeded_at_commit ?? null, seed.files, seed.donor_root, seed.revisit);
+      expect(caught.caught_up).toBe(true);
+      const names = (await viewRows<{ name: string }>("SELECT name FROM symbols WHERE file = 'src/a.ts'", "eeeeeeeeeeee.index.db"))
+        .map((r) => r.name);
+      expect(names).toEqual(["a"]);
+    } finally {
+      try { git(["worktree", "remove", "--force", second], parentRoot); } catch { /* already gone */ }
+      rmSync(second, { recursive: true, force: true });
+    }
+  });
+
+  // Bug it catches: a seed from a sibling overlay that drops the sibling's own changes, or leaves them
+  // under the sibling's name.
+  it("copies a sibling overlay's changes under the new worktree's name", async () => {
+    makeParentIndex(join(dataDir, `${PARENT_HASH}.index.db`), [["src/a.ts", "a"]]);
+    const parentHead = git(["rev-parse", "HEAD"], parentRoot).trim();
+    registry({
+      [PARENT_NAME]: { name: PARENT_NAME, root: parentRoot, index_path: join(dataDir, `${PARENT_HASH}.index.json`), last_git_commit: parentHead },
+    });
+    writeFileSync(join(worktreeRoot, "src", "b.ts"), "export function b() {}\n");
+    git(["add", "-A"], worktreeRoot);
+    git(["commit", "-q", "-m", "b"], worktreeRoot);
+    const seed = await seedWorktreeIndexFromParent(worktreeRoot, WT_NAME, WT_INDEX());
+    const { catchUpSeededWorktree } = await import("../../src/tools/index-tools/worktree-seed.js");
+    const caught = await catchUpSeededWorktree(worktreeRoot, WT_NAME, seed.seeded_at_commit ?? null, seed.files, seed.donor_root, seed.revisit);
+    expect(caught.caught_up).toBe(true);
+
+    const second = join(parentRoot, "..", `codesift-seed-wt4-${process.pid}`);
+    git(["worktree", "add", "-q", "-b", "task4", second, "task"], parentRoot);
+    try {
+      const name = getRepoName(second);
+      const result = await seedWorktreeIndexFromParent(second, name, join(dataDir, "ffffffffffff.index.json"));
+      expect(result.parent_repo).toBe(WT_NAME);
+      expect(baseFiles()).toHaveLength(1);
+      const ids = (await viewRows<{ id: string }>("SELECT id FROM symbols WHERE file = 'src/b.ts'", "ffffffffffff.index.db"))
+        .map((r) => r.id);
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.every((id) => id.startsWith(`${name}:`))).toBe(true);
+      expect(statSync(join(dataDir, "ffffffffffff.index.db")).size).toBeLessThan(statSync(baseFilesPath()).size * 4);
+    } finally {
+      try { git(["worktree", "remove", "--force", second], parentRoot); } catch { /* already gone */ }
+      rmSync(second, { recursive: true, force: true });
+    }
   });
 
   it("records the PARENT's commit, not the worktree's HEAD", async () => {
@@ -278,10 +390,7 @@ describe("seedWorktreeIndexFromParent", () => {
 
     expect(caught.caught_up).toBe(true);
     expect(caught.removed).toBe(1);
-    const db = new DatabaseSync(`file:${join(dataDir, "bbbbbbbbbbbb.index.db")}?mode=ro`, { open: true });
-    const files = (db.prepare("SELECT DISTINCT file FROM symbols ORDER BY file").all() as Array<{ file: string }>)
-      .map((r) => r.file);
-    db.close();
+    const files = (await viewRows<{ file: string }>("SELECT DISTINCT file FROM symbols ORDER BY file")).map((r) => r.file);
     expect(files).toEqual(["src/a.ts"]);
   });
 
@@ -303,10 +412,7 @@ describe("seedWorktreeIndexFromParent", () => {
     const { catchUpSeededWorktree } = await import("../../src/tools/index-tools/worktree-seed.js");
     await catchUpSeededWorktree(worktreeRoot, WT_NAME, seed.seeded_at_commit ?? null, seed.files, seed.donor_root);
 
-    const db = new DatabaseSync(`file:${join(dataDir, "bbbbbbbbbbbb.index.db")}?mode=ro`, { open: true });
-    const files = (db.prepare("SELECT DISTINCT file FROM symbols ORDER BY file").all() as Array<{ file: string }>)
-      .map((r) => r.file);
-    db.close();
+    const files = (await viewRows<{ file: string }>("SELECT DISTINCT file FROM symbols ORDER BY file")).map((r) => r.file);
     expect(files).toEqual(["src/a.ts"]);
   });
 

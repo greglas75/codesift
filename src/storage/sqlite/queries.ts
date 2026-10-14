@@ -1,6 +1,7 @@
 import type { CodeSymbol } from "../../types.js";
 import { openIndexDb, openReadConnection, readMetaValue } from "./connection.js";
 import { rethrowNative, rethrowOperational } from "./errors.js";
+import { countIndexRows } from "./overlay.js";
 
 // Kept importable from here: tests and callers predate its move to errors.ts.
 export { rethrowNative } from "./errors.js";
@@ -396,8 +397,8 @@ export async function getIndexMetaSqlite(dbPath: string): Promise<IndexMeta | nu
     const repo = readMetaValue(db, "repo");
     const root = readMetaValue(db, "root");
     if (repo === undefined || root === undefined) return null;
-    const symbolCount = (db.prepare("SELECT COUNT(*) AS n FROM symbols").get() as { n: number }).n;
-    const fileCount = (db.prepare("SELECT COUNT(*) AS n FROM files").get() as { n: number }).n;
+    const symbolCount = countIndexRows(db, "symbols");
+    const fileCount = countIndexRows(db, "files");
     return {
       repo,
       root,

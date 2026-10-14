@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import { recordEmbeddingRun } from "../../storage/embedding-health.js";
 import { EXTRACTOR_VERSIONS } from "../index-shared.js";
 import { getLanguageForExtension } from "../../parser/parser-manager.js";
-import { saveIndex, loadIndex, loadIndexSummary, getIndexPath } from "../../storage/index-store.js";
+import { saveIndex, loadIndex, loadIndexSummary, getIndexPath, applyIndexDelta } from "../../storage/index-store.js";
+import { sqlitePathFor } from "../../storage/index-migration.js";
+import { deltaFits, planOverlayDelta, storedEntryKey } from "./overlay-delta.js";
 import { trackExternalWriter } from "../../storage/external-writers.js";
 import { clearTsconfigCache } from "../../utils/tsconfig-paths.js";
 import {
@@ -396,7 +398,12 @@ export async function indexFolder(
   // make it whole-repo.
   if (!options?.include_paths) {
     const alreadyIndexed = await getRepo(config.registryPath, repoName);
-    if (!alreadyIndexed) {
+    // An overlay whose shared base is gone cannot be opened at all (worktree-overlay.ts). It holds
+    // only this tree's changed files, so it is discarded and seeded again rather than walked into.
+    const { discardOverlayWithoutBase } = await import("./worktree-overlay.js");
+    const discarded = await discardOverlayWithoutBase(indexPath);
+    if (discarded) console.error(`[codesift] ${repoName}: overlay index lost its base — seeding it again`);
+    if (!alreadyIndexed || discarded) {
       const { seedWorktreeIndexFromParent } = await import("./worktree-seed.js");
       const seed = await seedWorktreeIndexFromParent(rootPath, repoName, indexPath);
       if (seed.seeded) {
@@ -417,6 +424,8 @@ export async function indexFolder(
           seed.seeded_at_commit ?? null,
           seed.files,
           seed.donor_root,
+          seed.revisit,
+          seed.worktree_mtimes,
         );
         if (caught.caught_up) {
           const summary = await loadIndexSummary(indexPath);
@@ -493,6 +502,10 @@ export async function indexFolder(
 
   // mtime-based incremental: skip files unchanged since last index
   const existing = await loadIndex(indexPath);
+  // An overlay (worktree-overlay.ts) is written back as the files this walk changed, not as a whole
+  // index — which would mask every base path and make it a full copy again (overlay-delta.ts).
+  const { overlayIdPrefixOf } = await import("./worktree-overlay.js");
+  const overlayBasePrefix = existing ? await overlayIdPrefixOf(sqlitePathFor(indexPath)) : null;
   const mtimeMap = new Map<string, number>();
   if (existing) {
     for (const f of existing.files) {
@@ -550,6 +563,11 @@ export async function indexFolder(
       fileEntryByPath.set(fe.path, fe);
     }
   }
+  // Taken before the walk: reused entries are the stored objects, and dirty propagation below marks
+  // them stale in place — comparing against them afterwards would find nothing changed.
+  const storedEntries = existing && overlayBasePrefix !== null
+    ? new Map(existing.files.map((f) => [f.path, storedEntryKey(f)]))
+    : null;
 
   if (mtimeMap.size > 0) {
     const { stat } = await import("node:fs/promises");
@@ -667,7 +685,19 @@ export async function indexFolder(
     includePaths: options?.include_paths,
   });
   if (!("mergedSymbols" in mergeResult)) return mergeResult;
-  const { mergedSymbols, mergedEntries, mergedSnapshotFiles } = mergeResult;
+  const { mergedEntries, mergedSnapshotFiles } = mergeResult;
+  let { mergedSymbols } = mergeResult;
+  const overlayPlan = storedEntries && overlayBasePrefix !== null
+    ? planOverlayDelta({
+      storedSymbolsByFile: symbolsByFile,
+      storedEntries,
+      parsedPaths: new Set(parsedEntries.map((e) => e.path)),
+      symbols: mergedSymbols,
+      entries: mergedEntries,
+      idPrefixes: [`${repoName}:`, overlayBasePrefix],
+    })
+    : null;
+  if (overlayPlan) mergedSymbols = overlayPlan.symbols;
 
   // Build and cache BM25 index from the FINAL (possibly merged) symbol set.
   // Built here (not before the guard) so a rejected_partial early-return leaves
@@ -711,7 +741,21 @@ export async function indexFolder(
   // Source-complete only when this run parsed every file it is about to store. The mtime reuse
   // path above keeps symbols from the previous index for unchanged files, and those carry
   // whatever an older schema left behind — so a partial re-parse must not clear the lossy marker.
-  await saveIndex(indexPath, codeIndex, { sourceComplete: filesToParse.length === files.length });
+  if (overlayPlan && deltaFits(overlayPlan, mergedEntries.length)) {
+    await applyIndexDelta(indexPath, {
+      ...overlayPlan.delta,
+      updatedAt: codeIndex.updated_at,
+      meta: { extractor_version: codeIndex.extractor_version, workspaces: codeIndex.workspaces },
+    });
+  } else {
+    if (overlayPlan) {
+      console.error(
+        `[codesift] ${repoName}: ${overlayPlan.changedFiles} of ${mergedEntries.length} files changed — ` +
+        "writing a whole index (the overlay becomes a plain one)",
+      );
+    }
+    await saveIndex(indexPath, codeIndex, { sourceComplete: filesToParse.length === files.length });
+  }
   if (isNativeBM25(bm25)) rememberBM25Index(repoName, storeBackedBM25(bm25.native, repoName));
 
   // In an index child the BM25 index just built dies with the process, and the daemon's first

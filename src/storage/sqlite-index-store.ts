@@ -65,6 +65,8 @@ export {
   loadIndexSummarySqlite,
   removeFileFromIndexSqlite,
   saveIncrementalSqlite,
+  applyIndexDeltaSqlite,
+  setFileMtimesSqlite,
   indexDbIsPopulated,
 } from "./sqlite/accessors.js";
 // Narrow reads for ADR-004 stage 2. Listed explicitly, like everything else here: adding an export

@@ -12,8 +12,8 @@ import {
 import { rethrowNative, rethrowOperational } from "./errors.js";
 import { getNativeCore, type NativeCore } from "../../native/index.js";
 import { readMetaExtras } from "./meta.js";
+import { clearIndexRows, insertFileSqlFor } from "./overlay.js";
 import {
-  INSERT_FILE_SQL,
   INSERT_SYMBOL_SQL,
   fileEntryToRow,
   fileRowBytes,
@@ -185,8 +185,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 async function writeIndexRows(db: DatabaseSyncType, index: CodeIndex): Promise<void> {
-  db.exec("DELETE FROM symbols");
-  db.exec("DELETE FROM files");
+  clearIndexRows(db);
 
   // The transaction stays OPEN across these yields, which is safe only because writes to one index
   // are serialised (see the per-path write lock in index-json-mutations.ts and the mutex in
@@ -200,7 +199,7 @@ async function writeIndexRows(db: DatabaseSyncType, index: CodeIndex): Promise<v
     if (++sinceYield >= ROWS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }
   }
 
-  const insFile = db.prepare(INSERT_FILE_SQL);
+  const insFile = db.prepare(insertFileSqlFor(db));
   for (const file of index.files) {
     insFile.run(...(fileEntryToRow(file) as never[]));
     if (++sinceYield >= ROWS_PER_TURN) { sinceYield = 0; await yieldToEventLoop(); }

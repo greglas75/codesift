@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Changed
+
+- **A linked worktree's index is an overlay on a shared base, not a full copy of its donor.** The
+  worktree's database holds only the files it changed; the rest is read from a read-only
+  `base-<hash>.db` that every worktree seeded from the same donor commit shares. On the sessions host
+  each caretaker worktree of tgm-survey-platform held a 2.5 GB copy (14 of them, 35 GB). On a real
+  548,954-symbol index the overlay is 5.2 MB against 802 MB, and every read path answers identically
+  (TypeScript and Rust store, call graph included). Re-walking a worktree writes only the files that
+  changed, so the overlay stays small; a re-walk that changed more than a quarter of the files writes
+  a whole index and the database becomes a plain one. `prune` removes a base once no index points at
+  it (`overlay_bases_kept` / `overlay_bases_removed`). Native ABI 27.
+
+### Fixed
+
+- **A second `index_folder` of a seeded worktree no longer re-parses the whole tree.** The seed kept
+  the donor's mtimes, so every file looked modified to the next walk and to `index_file`; the seed now
+  records the worktree's own mtimes once the catch-up has re-read the files that differ.
+
 ## [0.24.0] — 2026-10-12
 
 Semantic search moves into the Rust core: vectors are stored in a binary file 5× smaller than the

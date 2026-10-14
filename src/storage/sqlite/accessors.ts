@@ -8,9 +8,9 @@ import {
   writeMetaValue,
 } from "./connection.js";
 import { rethrowOperational } from "./errors.js";
+import { countIndexRows, insertFileSqlFor } from "./overlay.js";
 import { readMetaExtras, type IndexSummary } from "./meta.js";
 import {
-  INSERT_FILE_SQL,
   INSERT_SYMBOL_SQL,
   fileEntryToRow,
   rowToFileEntry,
@@ -101,9 +101,7 @@ export async function loadIndexSummarySqlite(dbPath: string): Promise<IndexSumma
       const files = (
         snapshot.prepare("SELECT * FROM files ORDER BY rowid").all() as unknown as FileRow[]
       ).map(rowToFileEntry);
-      const counted = snapshot.prepare("SELECT COUNT(*) AS n FROM symbols").get() as
-        | { n: number }
-        | undefined;
+      const counted = { n: countIndexRows(snapshot, "symbols") };
 
       const summary: IndexSummary = {
         repo,
@@ -165,7 +163,7 @@ export async function saveIncrementalSqlite(
     const insSym = db.prepare(INSERT_SYMBOL_SQL);
     for (const sym of newSymbols) insSym.run(...(symbolToRow(sym) as never[]));
 
-    if (fileEntry) db.prepare(INSERT_FILE_SQL).run(...(fileEntryToRow(fileEntry) as never[]));
+    if (fileEntry) db.prepare(insertFileSqlFor(db)).run(...(fileEntryToRow(fileEntry) as never[]));
 
     writeMetaValue(db, "updated_at", String(Date.now()));
     db.exec("COMMIT");
@@ -173,6 +171,88 @@ export async function saveIncrementalSqlite(
     rollbackQuietly(db);
     rethrowOperational(err, dbPath);
   }
+}
+
+/** The difference between an index on disk and the one a re-walk produced, file by file. */
+export interface IndexDelta {
+  /** Files whose symbols changed: their symbols are replaced, and their file row. */
+  replaced: Array<{ path: string; symbols: CodeSymbol[]; entry: FileEntry }>;
+  /** Files whose symbols did not change but whose file row did (a new mtime, a stale flag). */
+  entries: FileEntry[];
+  removed: string[];
+  /** Written as `updated_at`, so a snapshot paired with this write can be stamped to match. */
+  updatedAt: number;
+  meta: { extractor_version: unknown; workspaces: unknown };
+}
+
+/**
+ * Apply a re-walk as the files it changed, in one transaction, instead of rewriting every row.
+ *
+ * For an overlay this is the difference between staying a few MB and becoming a full copy again:
+ * a whole-index write masks every base path (overlay.ts `clearIndexRows`). Synchronous on purpose —
+ * no yields inside the transaction, so it cannot interleave with an incremental write on the
+ * shared connection; the caller bounds the size (folder-indexer.ts).
+ */
+export async function applyIndexDeltaSqlite(dbPath: string, delta: IndexDelta): Promise<void> {
+  const db = await openIndexDb(dbPath);
+  if (readMetaValue(db, "repo") === undefined) {
+    throw new Error(`Cannot apply a delta: index not found at ${dbPath}`);
+  }
+  db.exec("BEGIN");
+  try {
+    const delSym = db.prepare("DELETE FROM symbols WHERE file = ?");
+    const delFile = db.prepare("DELETE FROM files WHERE path = ?");
+    const insSym = db.prepare(INSERT_SYMBOL_SQL);
+    const insFile = db.prepare(insertFileSqlFor(db));
+    for (const path of delta.removed) {
+      delSym.run(path);
+      delFile.run(path);
+    }
+    for (const file of delta.replaced) {
+      delSym.run(file.path);
+      for (const sym of file.symbols) insSym.run(...(symbolToRow(sym) as never[]));
+      insFile.run(...(fileEntryToRow(file.entry) as never[]));
+    }
+    for (const entry of delta.entries) insFile.run(...(fileEntryToRow(entry) as never[]));
+    writeMetaValue(db, "updated_at", String(delta.updatedAt));
+    writeMetaValue(db, "extractor_version", JSON.stringify(delta.meta.extractor_version ?? null));
+    writeMetaValue(db, "workspaces", JSON.stringify(delta.meta.workspaces ?? null));
+    db.exec("COMMIT");
+  } catch (err) {
+    rollbackQuietly(db);
+    rethrowOperational(err, dbPath);
+  }
+}
+
+/**
+ * Set the `mtime_ms` of existing file rows, leaving everything else of them — and their symbols — as
+ * stored. On an overlay each is a file row alone (overlay.ts `overlay_masked_files`). Paths without
+ * a row are skipped.
+ */
+export async function setFileMtimesSqlite(
+  dbPath: string,
+  mtimes: ReadonlyArray<readonly [string, number]>,
+): Promise<number> {
+  const db = await openIndexDb(dbPath);
+  if (readMetaValue(db, "repo") === undefined) return 0;
+  let written = 0;
+  db.exec("BEGIN");
+  try {
+    const read = db.prepare("SELECT path, language, symbol_count, last_modified, mtime_ms, stale FROM files WHERE path = ?");
+    const insFile = db.prepare(insertFileSqlFor(db));
+    for (const [path, mtime] of mtimes) {
+      const row = read.get(path) as FileRow | undefined;
+      if (!row) continue;
+      insFile.run(...(fileEntryToRow({ ...rowToFileEntry(row), mtime_ms: mtime }) as never[]));
+      written++;
+    }
+    writeMetaValue(db, "updated_at", String(Date.now()));
+    db.exec("COMMIT");
+  } catch (err) {
+    rollbackQuietly(db);
+    rethrowOperational(err, dbPath);
+  }
+  return written;
 }
 
 /** Drop a deleted file's symbols and its files[] entry. */
