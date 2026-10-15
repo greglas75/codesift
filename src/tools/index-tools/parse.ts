@@ -12,7 +12,7 @@ import {
 import { runTreeSitterParse } from "../../parser/parser-pool.js";
 import { extractSqlSymbols, stripJinjaTokens } from "../../parser/extractors/sql.js";
 import { getLanguageForPath } from "../../parser/parser-manager.js";
-import { embeddingMemBudgetBytes, indexEmbeddingsEnabled } from "../../config.js";
+import { indexEmbeddingsEnabled } from "../../config.js";
 import { buildSymbolText, createEmbeddingProvider } from "../../search/semantic.js";
 import {
   loadEmbeddings,
@@ -287,7 +287,12 @@ export async function embedSymbols(
   try {
     const provider = createEmbeddingProvider(config.embeddingProvider, config);
     const symbolTexts = new Map(symbols.map((s) => [s.id, buildSymbolText(s)]));
-    const budget = embeddingMemBudgetBytes();
+    // Not the resident-cache budget: that bounds what a server keeps for queries, and here a file it
+    // refuses means every symbol is embedded again. Measured 2026-10-15: rdesigner's 498k vectors at
+    // 1024 dims are ~2.0 GB, over the 2,147 MB budget with overhead, so each worktree that had cloned
+    // them re-embedded all of them — ~$1 per worktree on OpenRouter. The vectors are held for this run
+    // only, and the run happens in a child process when the daemon starts it.
+    const budget = Number.POSITIVE_INFINITY;
 
     // Vectors from another model are incomparable, and the content hash cannot tell: it covers the
     // TEXT, so an unchanged symbol embedded by the old model passed as current and was kept forever,
