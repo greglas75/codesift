@@ -554,12 +554,22 @@ export async function batchEmbed(
     for (let i = w; i < Math.min(w + window, stillToEmbed.length); i += batchSize) {
       batches.push(stillToEmbed.slice(i, i + batchSize));
     }
-    const answers = await Promise.all(batches.map((batch) => embedBatchWithStallRetry(embedFn, batch.map((b) => b.text))));
+    const answers = await Promise.allSettled(
+      batches.map((batch) => embedBatchWithStallRetry(embedFn, batch.map((b) => b.text))),
+    );
 
-    // In batch order, so the checkpoint is written exactly as a sequential run would write it.
+    // In batch order, so the checkpoint is written as a sequential run would write it. A failed batch
+    // stops the run AFTER every batch that succeeded in its window is checkpointed — the sequential
+    // loop kept what came before a failure, and a paid API must not be asked for those twice.
+    let failure: { reason: unknown } | null = null;
     for (let k = 0; k < batches.length; k++) {
       const batch = batches[k]!;
-      const vectors = answers[k]!;
+      const answer = answers[k]!;
+      if (answer.status === "rejected") {
+        failure ??= { reason: answer.reason };
+        continue;
+      }
+      const vectors = answer.value;
       const done: Array<{ id: string; vec: Float32Array; h: number | undefined }> = [];
       for (let j = 0; j < batch.length; j++) {
         const entry = batch[j];
@@ -575,6 +585,7 @@ export async function batchEmbed(
       }
       if (onBatch) await onBatch(done);
     }
+    if (failure) throw failure.reason;
   }
 
   // Remove embeddings for symbols that no longer exist in the corpus

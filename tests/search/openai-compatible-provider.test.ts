@@ -8,19 +8,19 @@ import { createEmbeddingProvider, expectedEmbeddingModel } from "../../src/searc
 const origFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = origFetch; });
 
-function captureRequests(): Array<{ url: string; body: Record<string, unknown> }> {
+function captureRequests(width: number): Array<{ url: string; body: Record<string, unknown> }> {
   const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
   globalThis.fetch = (async (url: string, init: { body: string }) => {
     const body = JSON.parse(init.body) as { input: string[] };
     seen.push({ url, body });
-    return { ok: true, json: async () => ({ data: body.input.map(() => ({ embedding: [1, 0] })) }) };
+    return { ok: true, json: async () => ({ data: body.input.map(() => ({ embedding: new Array<number>(width).fill(0.5) })) }) };
   }) as unknown as typeof fetch;
   return seen;
 }
 
 describe("OpenAI-compatible embedding provider", () => {
   it("sends the configured model to the configured endpoint, marking the query side for voyage", async () => {
-    const seen = captureRequests();
+    const seen = captureRequests(1024);
     const provider = createEmbeddingProvider("openai", {
       openaiApiKey: "k", openaiBaseUrl: "https://openrouter.ai/api/v1/", openaiModel: "voyageai/voyage-4-lite",
       openaiDimensions: 1024,
@@ -38,7 +38,7 @@ describe("OpenAI-compatible embedding provider", () => {
 
   // A model that does not know input_type could reject the request.
   it("keeps the plain OpenAI request for a model that is not voyage", async () => {
-    const seen = captureRequests();
+    const seen = captureRequests(1536);
     const provider = createEmbeddingProvider("openai", { openaiApiKey: "k" });
 
     await provider.embed(["x"], "query");
@@ -51,10 +51,18 @@ describe("OpenAI-compatible embedding provider", () => {
   // Node's 250 ms per-address default cut off every connect to openrouter.ai on a loaded Mac (280 ms).
   it("gives a remote host more than 250 ms per address to connect", async () => {
     setDefaultAutoSelectFamilyAttemptTimeout(250);
-    captureRequests();
+    captureRequests(1536);
 
     await createEmbeddingProvider("openai", { openaiApiKey: "k" }).embed(["x"]);
 
     expect(getDefaultAutoSelectFamilyAttemptTimeout()).toBeGreaterThanOrEqual(2_000);
+  });
+
+  // A mistyped CODESIFT_OPENAI_DIMENSIONS would be written into the meta beside vectors of another width.
+  it("refuses vectors whose width is not the configured one", async () => {
+    captureRequests(1536);
+    const provider = createEmbeddingProvider("openai", { openaiApiKey: "k", openaiDimensions: 1024 });
+
+    await expect(provider.embed(["x"])).rejects.toThrow(/1536-dimensional.*configured 1024/);
   });
 });

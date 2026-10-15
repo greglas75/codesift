@@ -241,4 +241,24 @@ describe("batchEmbed with batches in flight at once", () => {
     );
     expect(reported).toEqual([["id0", "id1", "id2"], ["id3", "id4", "id5"], ["id6", "id7", "id8"], ["id9"]]);
   });
+
+  // A paid API must not be asked twice for batches that succeeded beside a failed one.
+  it("checkpoints the batches that succeeded before reporting a failed one", async () => {
+    const texts = new Map(Array.from({ length: 9 }, (_, i) => [`id${i}`, String(i)]));
+    const reported: string[] = [];
+
+    const run = batchEmbed(
+      texts, new Map(),
+      async (batch) => {
+        if (batch.includes("3")) throw new Error("upstream 500");
+        return batch.map((t) => [Number(t)]);
+      },
+      3, undefined, undefined,
+      async (done) => { reported.push(...done.map((d) => d.id)); },
+      4,
+    );
+
+    await expect(run).rejects.toThrow("upstream 500");
+    expect(reported).toEqual(["id0", "id1", "id2", "id6", "id7", "id8"]);
+  });
 });

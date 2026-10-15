@@ -281,7 +281,7 @@ export class OpenAIProvider implements EmbeddingProvider {
 
   constructor(apiKey: string, options: { baseUrl?: string | null; model?: string | null; dimensions?: number | null } = {}) {
     this.apiKey = apiKey;
-    this.baseUrl = (options.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+    this.baseUrl = (options.baseUrl || "https://api.openai.com/v1").replace(/\/+$/, "");
     this.model = options.model ?? DEFAULT_OPENAI_MODEL;
     this.dimensions = options.dimensions ?? 1536;
   }
@@ -291,7 +291,17 @@ export class OpenAIProvider implements EmbeddingProvider {
     // is on: measured on this repo, voyage-4-lite MRR 0.867 -> 0.878 with input_type.
     const body: Record<string, unknown> = { input: texts, model: this.model };
     if (this.model.includes("voyage")) body["input_type"] = mode === "query" ? "query" : "document";
-    return fetchEmbeddings(`${this.baseUrl}/embeddings`, this.apiKey, body, "OpenAI");
+    const vectors = await fetchEmbeddings(`${this.baseUrl}/embeddings`, this.apiKey, body, "OpenAI");
+    // The width is declared in config, not negotiated: a wrong CODESIFT_OPENAI_DIMENSIONS would be
+    // written into the meta beside vectors of another width.
+    const wrong = vectors.find((v) => v.length !== this.dimensions);
+    if (wrong) {
+      throw new Error(
+        `${this.model} returned ${wrong.length}-dimensional vectors, configured ${this.dimensions} ` +
+        `(CODESIFT_OPENAI_DIMENSIONS)`,
+      );
+    }
+    return vectors;
   }
 }
 
