@@ -22,10 +22,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The full suite directly exercises node:sqlite, which exists from
-        # Node 22.5. Node 20 compatibility is kept in runtime fallbacks; it
-        # cannot execute the SQLite-specific test modules themselves.
-        node: [22]
+        # Node 24, the version every deployment of this server runs (the Mac,
+        # ryzen-dev). The suite exercises node:sqlite directly, and Node 22's
+        # SQLite (3.51) lacks what the worktree overlay needs, so on 22 those
+        # suites skip and the fallback runs instead — testing the fallback
+        # here meant the main path went untested in CI. Node 20/22 keep
+        # working through runtime fallbacks (engines >=20).
+        node: [24]
     steps:
       - uses: actions/checkout@v7
         with:

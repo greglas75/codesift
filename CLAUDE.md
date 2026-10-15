@@ -225,8 +225,9 @@ store embeds the SQL — after changing it, rebuild the addon (`npm run build:na
 Rust store), 3.51 does not (node:sqlite on Node 22: "qualified table names are not allowed …").**
 `overlayWritesSupported` probes it once per SQLite. Without it the seed declines (a full index runs),
 a re-walk writes the whole index (the overlay becomes plain), and an overlay another process made
-opens with its views only. CI runs Node 22 without the core, so the overlay suites skip there and one
-seed test runs only there.
+opens with its views only. CI runs Node 24 (since 2026-10-15; it was 22, where the overlay suites
+skipped). The one seed test for the decline path runs only on a Node 22 SQLite — run it on the farm
+with Node 22 when touching that path.
 
 ### index_folder sanity check is now visible + self-healing (NEW)
 When a re-walk finds <50% of the previously indexed file count, index_folder keeps the old index — but now returns `status: "rejected_partial"` + `reason` + `hint` instead of silently echoing the old counts as success (pre-fix this skipped saveIndex AND registerRepo, so the repo could vanish from the registry while the tool reported OK). Before rejecting, it samples the old index's paths on disk: if ≥50% no longer exist (e.g. deleted `.worktrees/` swept by an older walker), the old index is treated as stale and the new one is accepted (auto-heal — breaks the poisoned-baseline deadlock where every honest reindex was rejected forever).
