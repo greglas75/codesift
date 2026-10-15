@@ -1,6 +1,7 @@
 // The OpenAI provider is also the way to reach any OpenAI-compatible gateway (OpenRouter). A setting
 // that silently fell back to api.openai.com or text-embedding-3-small would embed with the wrong model,
 // and every stored vector would then be judged stale against the configured one.
+import { getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmbeddingProvider, expectedEmbeddingModel } from "../../src/search/semantic.js";
 
@@ -45,5 +46,15 @@ describe("OpenAI-compatible embedding provider", () => {
     expect(seen).toEqual([{
       url: "https://api.openai.com/v1/embeddings", body: { input: ["x"], model: "text-embedding-3-small" },
     }]);
+  });
+
+  // Node's 250 ms per-address default cut off every connect to openrouter.ai on a loaded Mac (280 ms).
+  it("gives a remote host more than 250 ms per address to connect", async () => {
+    setDefaultAutoSelectFamilyAttemptTimeout(250);
+    captureRequests();
+
+    await createEmbeddingProvider("openai", { openaiApiKey: "k" }).embed(["x"]);
+
+    expect(getDefaultAutoSelectFamilyAttemptTimeout()).toBeGreaterThanOrEqual(2_000);
   });
 });

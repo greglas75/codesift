@@ -1,3 +1,4 @@
+import { getDefaultAutoSelectFamilyAttemptTimeout, setDefaultAutoSelectFamilyAttemptTimeout } from "node:net";
 import type { CodeSymbol, SearchResult } from "../types.js";
 import { withEmbedSlot } from "./embed-gate.js";
 import { importTransformers, localEmbeddingRemedy } from "./optional-transformers.js";
@@ -195,12 +196,23 @@ function isEmbeddingResponse(data: unknown): data is { data: Array<{ embedding: 
  * Shared fetch+validate logic for OpenAI-compatible embedding APIs.
  * Handles: POST -> check response.ok -> parse JSON -> guard shape -> extract embeddings.
  */
+/**
+ * Node gives each address of a host 250 ms to connect before trying the next one. Measured
+ * 2026-10-15 on this Mac at load ~35: a TCP connect to openrouter.ai took 280 ms, IPv6 was
+ * unreachable, so every address was cut off and every request failed with "fetch failed"
+ * (connect ETIMEDOUT) — while curl and Python, which have no such cut-off, worked.
+ */
+const REMOTE_CONNECT_ATTEMPT_MS = 2_000;
+
 async function fetchEmbeddings(
   url: string,
   apiKey: string,
   requestBody: Record<string, unknown>,
   providerName: string,
 ): Promise<number[][]> {
+  if (getDefaultAutoSelectFamilyAttemptTimeout() < REMOTE_CONNECT_ATTEMPT_MS) {
+    setDefaultAutoSelectFamilyAttemptTimeout(REMOTE_CONNECT_ATTEMPT_MS);
+  }
   // The texts live in the request body for every OpenAI-compatible provider, so the
   // deadline is derived from the same place for local and remote alike. A body that
   // does not carry an input array simply gets the 30s floor, which is what remote
