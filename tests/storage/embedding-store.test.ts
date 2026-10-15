@@ -10,6 +10,8 @@ import {
   getEmbeddingPath,
   getEmbeddingMetaPath,
   batchEmbed,
+  contentHashesFor,
+  primeContentHashes,
 } from "../../src/storage/embedding-store.js";
 import type { EmbeddingMeta } from "../../src/types.js";
 
@@ -262,3 +264,29 @@ describe("batchEmbed with batches in flight at once", () => {
     expect(reported).toEqual(["id0", "id1", "id2", "id6", "id7", "id8"]);
   });
 });
+
+describe("batchEmbed when text only moved to another line", () => {
+  // A line added above a chunk renamed it (ids end in the line), and a worktree on another branch
+  // re-embedded ~100k chunks whose text it already had vectors for.
+  it("reuses the stored vector of the same text in the same file", async () => {
+    const stored = new Float32Array([7, 7]);
+    // Learn the hash batchEmbed gives "same text" by embedding it once under the old id.
+    await batchEmbed(new Map([["r:a.ts:10", "same text"]]), new Map(), async (t) => t.map(() => [7, 7]), 8, "moved-repo");
+    const storedHash = contentHashesFor("moved-repo").get("r:a.ts:10")!;
+    primeContentHashes("moved-repo-2", new Map([["r:a.ts:10", storedHash]]));
+    const sent: string[] = [];
+
+    const result = await batchEmbed(
+      new Map([["r:a.ts:11", "same text"], ["r:b.ts:11", "same text"]]),
+      new Map([["r:a.ts:10", stored]]),
+      async (texts) => { sent.push(...texts); return texts.map(() => [1, 1]); },
+      8, "moved-repo-2",
+    );
+
+    expect(result.get("r:a.ts:11")).toBe(stored);
+    // Another file is another place: the same text there is not paired by a 32-bit hash.
+    expect(sent).toEqual(["same text"]);
+    expect([...result.get("r:b.ts:11")!]).toEqual([1, 1]);
+  });
+});
+

@@ -373,6 +373,25 @@ function contentHash(text: string): number {
   return h >>> 0;
 }
 
+/** An embedding id without its trailing `:line` — `repo:file:name` for a symbol, `repo:file` for a chunk. */
+function withoutLine(id: string): string {
+  const cut = id.lastIndexOf(":");
+  return cut > 0 ? id.slice(0, cut) : id;
+}
+
+/** Stored vectors keyed by place (id without line) and content hash; only ids with a known hash. */
+function vectorsByPlaceAndHash(
+  existing: ReadonlyMap<string, Float32Array>,
+  hashes: ReadonlyMap<string, number>,
+): Map<string, Float32Array> {
+  const byPlace = new Map<string, Float32Array>();
+  for (const [id, vec] of existing) {
+    const h = hashes.get(id);
+    if (h !== undefined) byPlace.set(`${withoutLine(id)}\0${h}`, vec);
+  }
+  return byPlace;
+}
+
 /** Track content hashes so we re-embed when symbol content changes. */
 const embeddingContentHashes = new Map<string, Map<string, number>>();
 
@@ -519,6 +538,29 @@ export async function batchEmbed(
     } else {
       hashes.set(id, hash);
     }
+  }
+
+  // An id ends in its line number, so a line added near the top of a file renames every symbol and
+  // chunk below it while their text stays the same. Measured 2026-10-15: a worktree of rdesigner on
+  // another branch cloned the main checkout's 480k chunk vectors and still sent ~100k chunks to the
+  // API. A vector is a function of the text alone, so the same text in the same file (id minus its
+  // line) under the hash already stored takes the stored vector; the file scope keeps the 32-bit
+  // hash from pairing unrelated texts.
+  if (cacheKey !== undefined && toEmbed.length > 0) {
+    const moved = vectorsByPlaceAndHash(existing, hashes);
+    const remaining: typeof toEmbed = [];
+    for (const item of toEmbed) {
+      const h = pendingHash.get(item.id)!;
+      const vec = moved.get(`${withoutLine(item.id)}\0${h}`);
+      if (vec) {
+        result.set(item.id, vec);
+        hashes.set(item.id, h);
+      } else {
+        remaining.push(item);
+      }
+    }
+    toEmbed.length = 0;
+    for (const item of remaining) toEmbed.push(item);
   }
 
   // Cross-repo lookup before calling the model. Half of the symbols still
