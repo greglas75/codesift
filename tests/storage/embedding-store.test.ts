@@ -216,3 +216,29 @@ describe("batchEmbed", () => {
     expect(batchSizes).toEqual([3, 3, 3, 1]);
   });
 });
+
+describe("batchEmbed with batches in flight at once", () => {
+  // Answers arriving out of order must not land on another batch's ids, and the checkpoint must
+  // still be written in batch order.
+  it("pairs every vector with its own text and reports batches in order", async () => {
+    const texts = new Map(Array.from({ length: 10 }, (_, i) => [`id${i}`, String(i)]));
+    const reported: string[][] = [];
+
+    const result = await batchEmbed(
+      texts, new Map(),
+      // The first batch answers last.
+      async (batch) => {
+        await new Promise((r) => setTimeout(r, batch[0] === "0" ? 30 : 1));
+        return batch.map((t) => [Number(t)]);
+      },
+      3, undefined, undefined,
+      async (done) => { reported.push(done.map((d) => d.id)); },
+      4,
+    );
+
+    expect([...result].map(([id, v]) => [id, v[0]])).toEqual(
+      Array.from({ length: 10 }, (_, i) => [`id${i}`, i]),
+    );
+    expect(reported).toEqual([["id0", "id1", "id2"], ["id3", "id4", "id5"], ["id6", "id7", "id8"], ["id9"]]);
+  });
+});

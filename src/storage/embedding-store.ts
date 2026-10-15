@@ -494,6 +494,11 @@ export async function batchEmbed(
    * reported: they cost nothing to repeat.
    */
   onBatch?: (entries: Array<{ id: string; vec: Float32Array; h: number | undefined }>) => Promise<void>,
+  /**
+   * Batches in flight at once. 1 for a model on this machine; a remote API answers each batch in
+   * ~1-3 s whatever the load here, so sequential requests made a 498k-symbol repo a 3-hour job.
+   */
+  concurrency = 1,
 ): Promise<Map<string, Float32Array>> {
   const result = new Map(existing);
   // A COPY, published only when the run returns: the shared map outlives a failed run in this process,
@@ -543,26 +548,33 @@ export async function batchEmbed(
   // which V8 overflows somewhere between 100k and 125k arguments — so every repo
   // above ~100k symbols threw "Maximum call stack size exceeded" here and could
   // never be embedded at all (12 repos on this machine, the four largest first).
-  for (let i = 0; i < stillToEmbed.length; i += batchSize) {
-    const batch = stillToEmbed.slice(i, i + batchSize);
-    const texts = batch.map((b) => b.text);
-
-    const vectors = await embedBatchWithStallRetry(embedFn, texts);
-
-    const done: Array<{ id: string; vec: Float32Array; h: number | undefined }> = [];
-    for (let j = 0; j < batch.length; j++) {
-      const entry = batch[j];
-      const vec = vectors[j];
-      if (entry && vec) {
-        const f32 = new Float32Array(vec);
-        result.set(entry.id, f32);
-        if (entry.key) freshlyEmbedded.push({ key: entry.key, vec: f32 });
-        const h = pendingHash.get(entry.id);
-        if (h !== undefined) hashes.set(entry.id, h);
-        done.push({ id: entry.id, vec: f32, h });
-      }
+  const window = batchSize * Math.max(1, concurrency);
+  for (let w = 0; w < stillToEmbed.length; w += window) {
+    const batches: Array<typeof stillToEmbed> = [];
+    for (let i = w; i < Math.min(w + window, stillToEmbed.length); i += batchSize) {
+      batches.push(stillToEmbed.slice(i, i + batchSize));
     }
-    if (onBatch) await onBatch(done);
+    const answers = await Promise.all(batches.map((batch) => embedBatchWithStallRetry(embedFn, batch.map((b) => b.text))));
+
+    // In batch order, so the checkpoint is written exactly as a sequential run would write it.
+    for (let k = 0; k < batches.length; k++) {
+      const batch = batches[k]!;
+      const vectors = answers[k]!;
+      const done: Array<{ id: string; vec: Float32Array; h: number | undefined }> = [];
+      for (let j = 0; j < batch.length; j++) {
+        const entry = batch[j];
+        const vec = vectors[j];
+        if (entry && vec) {
+          const f32 = new Float32Array(vec);
+          result.set(entry.id, f32);
+          if (entry.key) freshlyEmbedded.push({ key: entry.key, vec: f32 });
+          const h = pendingHash.get(entry.id);
+          if (h !== undefined) hashes.set(entry.id, h);
+          done.push({ id: entry.id, vec: f32, h });
+        }
+      }
+      if (onBatch) await onBatch(done);
+    }
   }
 
   // Remove embeddings for symbols that no longer exist in the corpus

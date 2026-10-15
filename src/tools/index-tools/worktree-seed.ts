@@ -320,7 +320,7 @@ export async function seedWorktreeIndexFromParent(
         : await cloneVectorsFromNearestDonor(
           worktreeRoot, worktreeName, worktreeIndexPath,
           (await import("../../search/semantic.js")).expectedEmbeddingModel(
-            config.embeddingProvider, config.localModel, config.ollamaModel,
+            config.embeddingProvider, config.localModel, config.ollamaModel, config.openaiModel,
           ),
         );
       embeddings = vectors.seeded ? { vectors: vectors.vectors ?? 0 } : { skipped: vectors.reason ?? "unknown" };

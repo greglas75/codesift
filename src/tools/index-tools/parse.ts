@@ -335,6 +335,7 @@ export async function embedSymbols(
       // embedded checkout then costs lookups instead of model calls.
       { model: provider.model, dimensions: provider.dimensions },
       checkpoint ? (done) => checkpoint!.append(done) : undefined,
+      config.embeddingConcurrency,
     );
     await saveEmbeddings(embeddingPath, embeddings, contentHashesFor(repoName));
     await saveEmbeddingMeta(metaPath, {
@@ -494,6 +495,7 @@ export async function embedChunks(
         // it was ever eligible for a lookup. The symbol path ~85 lines above always passed this.
         { model: provider.model, dimensions: provider.dimensions },
         checkpoint ? (done) => checkpoint!.append(done) : undefined,
+        config.embeddingConcurrency,
       );
       // A semantic query may have populated the process-wide cache before this
       // re-index. Invalidate before the first publication so a failed second

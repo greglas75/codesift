@@ -161,11 +161,17 @@ export interface Config {
   embeddingProvider: EmbeddingProvider;
   voyageApiKey: string | null;
   openaiApiKey: string | null;
+  /** Any OpenAI-compatible embeddings endpoint (e.g. OpenRouter), its model id and vector width. */
+  openaiBaseUrl: string | null;
+  openaiModel: string | null;
+  openaiDimensions: number | null;
   ollamaUrl: string | null;
   ollamaModel: string | null;
   ollamaDimensions: number | null;
   localModel: string | null;
   embeddingBatchSize: number; // 128
+  /** Embedding batches in flight at once (CODESIFT_EMBEDDING_CONCURRENCY): 1, or 4 for a remote API. */
+  embeddingConcurrency: number;
 
   // Retrieval
   defaultTokenBudget: number;  // 8000
@@ -186,6 +192,9 @@ export function loadConfig(): Config {
 
   const voyageApiKey = process.env["CODESIFT_VOYAGE_API_KEY"] ?? null;
   const openaiApiKey = process.env["CODESIFT_OPENAI_API_KEY"] ?? null;
+  const openaiBaseUrl = process.env["CODESIFT_OPENAI_BASE_URL"] ?? null;
+  const openaiModel = process.env["CODESIFT_OPENAI_MODEL"] ?? null;
+  const openaiDims = Number.parseInt(process.env["CODESIFT_OPENAI_DIMENSIONS"] ?? "", 10);
   const ollamaUrl = process.env["CODESIFT_OLLAMA_URL"] ?? null;
   const ollamaModel = process.env["CODESIFT_OLLAMA_MODEL"] ?? null;
   const ollamaDimsRaw = process.env["CODESIFT_OLLAMA_DIMENSIONS"];
@@ -219,11 +228,17 @@ export function loadConfig(): Config {
     embeddingProvider,
     voyageApiKey,
     openaiApiKey,
+    openaiBaseUrl,
+    openaiModel,
+    openaiDimensions: Number.isFinite(openaiDims) && openaiDims > 0 ? openaiDims : null,
     ollamaUrl,
     ollamaModel,
     ollamaDimensions: ollamaDimensions && Number.isFinite(ollamaDimensions) ? ollamaDimensions : null,
     localModel,
     embeddingBatchSize: parseIntEnv("CODESIFT_EMBEDDING_BATCH_SIZE", 128),
+    embeddingConcurrency: Math.max(1, parseIntEnv(
+      "CODESIFT_EMBEDDING_CONCURRENCY", embeddingProvider === "openai" || embeddingProvider === "voyage" ? 4 : 1,
+    )),
 
     defaultTokenBudget: parseIntEnv("CODESIFT_DEFAULT_TOKEN_BUDGET", 8000),
     defaultTopK: parseIntEnv("CODESIFT_DEFAULT_TOP_K", 50),

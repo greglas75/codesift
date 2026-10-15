@@ -259,22 +259,27 @@ export class VoyageProvider implements EmbeddingProvider {
 // OpenAI provider
 // ---------------------------------------------------------------------------
 
-export class OpenAIProvider implements EmbeddingProvider {
-  readonly model = "text-embedding-3-small";
-  readonly dimensions = 1536;
-  private apiKey: string;
+const DEFAULT_OPENAI_MODEL = "text-embedding-3-small";
 
-  constructor(apiKey: string) {
+export class OpenAIProvider implements EmbeddingProvider {
+  readonly model: string;
+  readonly dimensions: number;
+  private apiKey: string;
+  private baseUrl: string;
+
+  constructor(apiKey: string, options: { baseUrl?: string | null; model?: string | null; dimensions?: number | null } = {}) {
     this.apiKey = apiKey;
+    this.baseUrl = (options.baseUrl ?? "https://api.openai.com/v1").replace(/\/+$/, "");
+    this.model = options.model ?? DEFAULT_OPENAI_MODEL;
+    this.dimensions = options.dimensions ?? 1536;
   }
 
-  async embed(texts: string[], _mode: EmbeddingMode = "document"): Promise<number[][]> {
-    return fetchEmbeddings(
-      "https://api.openai.com/v1/embeddings",
-      this.apiKey,
-      { input: texts, model: this.model },
-      "OpenAI",
-    );
+  async embed(texts: string[], mode: EmbeddingMode = "document"): Promise<number[][]> {
+    // Voyage models (here through a gateway such as OpenRouter) rank better told which side a text
+    // is on: measured on this repo, voyage-4-lite MRR 0.867 -> 0.878 with input_type.
+    const body: Record<string, unknown> = { input: texts, model: this.model };
+    if (this.model.includes("voyage")) body["input_type"] = mode === "query" ? "query" : "document";
+    return fetchEmbeddings(`${this.baseUrl}/embeddings`, this.apiKey, body, "OpenAI");
   }
 }
 
@@ -429,10 +434,11 @@ export function expectedEmbeddingModel(
   provider: "voyage" | "openai" | "ollama" | "local",
   localModel?: string | null,
   ollamaModel?: string | null,
+  openaiModel?: string | null,
 ): string {
   switch (provider) {
     case "voyage": return "voyage-code-3";
-    case "openai": return "text-embedding-3-small";
+    case "openai": return openaiModel ?? DEFAULT_OPENAI_MODEL;
     case "ollama": return ollamaModel ?? "nomic-embed-text";
     case "local": return localModel ?? DEFAULT_LOCAL_MODEL;
   }
@@ -625,6 +631,9 @@ export function createEmbeddingProvider(
   config: {
     voyageApiKey?: string | null;
     openaiApiKey?: string | null;
+    openaiBaseUrl?: string | null;
+    openaiModel?: string | null;
+    openaiDimensions?: number | null;
     ollamaUrl?: string | null;
     ollamaModel?: string | null;
     ollamaDimensions?: number | null;
@@ -638,7 +647,11 @@ export function createEmbeddingProvider(
     }
     case "openai": {
       if (!config.openaiApiKey) throw new Error("CODESIFT_OPENAI_API_KEY not set");
-      return new OpenAIProvider(config.openaiApiKey);
+      return new OpenAIProvider(config.openaiApiKey, {
+        baseUrl: config.openaiBaseUrl ?? null,
+        model: config.openaiModel ?? null,
+        dimensions: config.openaiDimensions ?? null,
+      });
     }
     case "ollama": {
       if (!config.ollamaUrl) throw new Error("CODESIFT_OLLAMA_URL not set");

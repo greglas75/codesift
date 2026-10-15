@@ -138,7 +138,7 @@ async function storedModelMatches(ctx: SemanticContext): Promise<boolean> {
   const { expectedEmbeddingModel } = await import("../search/semantic.js");
   const meta = await loadEmbeddingMeta(getEmbeddingMetaPath(ctx.repoMeta.index_path));
   if (!meta) return true;
-  return meta.model === expectedEmbeddingModel(ctx.config.embeddingProvider, ctx.config.localModel, ctx.config.ollamaModel);
+  return meta.model === expectedEmbeddingModel(ctx.config.embeddingProvider, ctx.config.localModel, ctx.config.ollamaModel, ctx.config.openaiModel);
 }
 
 /**

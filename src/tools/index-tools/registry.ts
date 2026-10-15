@@ -710,7 +710,7 @@ export async function getChunkEmbeddingCache(
     const { expectedEmbeddingModel } = await import("../../search/semantic.js");
     const embMeta = await loadEmbeddingMeta(getEmbeddingMetaPath(meta.index_path));
     if (embMeta && config.embeddingProvider) {
-      const want = expectedEmbeddingModel(config.embeddingProvider, config.localModel, config.ollamaModel);
+      const want = expectedEmbeddingModel(config.embeddingProvider, config.localModel, config.ollamaModel, config.openaiModel);
       if (embMeta.model !== want) return null;
     }
 
@@ -784,7 +784,7 @@ export async function getEmbeddingCache(
     const { expectedEmbeddingModel } = await import("../../search/semantic.js");
     const embMeta = await loadEmbeddingMeta(getEmbeddingMetaPath(meta.index_path));
     if (embMeta && config.embeddingProvider) {
-      const want = expectedEmbeddingModel(config.embeddingProvider, config.localModel, config.ollamaModel);
+      const want = expectedEmbeddingModel(config.embeddingProvider, config.localModel, config.ollamaModel, config.openaiModel);
       if (embMeta.model !== want) {
         console.error(
           `[codesift] ${repoName}: embeddings were built with "${embMeta.model}" but the active ` +
