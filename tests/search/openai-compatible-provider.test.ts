@@ -65,4 +65,14 @@ describe("OpenAI-compatible embedding provider", () => {
 
     await expect(provider.embed(["x"])).rejects.toThrow(/1536-dimensional.*configured 1024/);
   });
+
+  // A symbol text cut at 200 code units can end in half an emoji; Voyage rejected such a batch (400).
+  it("sends no lone surrogate", async () => {
+    const seen = captureRequests(1536);
+    const cut = "const smile = '\u{1F600}'".slice(0, 16);
+
+    await createEmbeddingProvider("openai", { openaiApiKey: "k" }).embed([cut, "ok \u{1F600}"]);
+
+    expect(seen[0]!.body["input"]).toEqual(["const smile = '\uFFFD", "ok \u{1F600}"]);
+  });
 });

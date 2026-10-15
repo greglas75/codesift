@@ -193,9 +193,15 @@ function isEmbeddingResponse(data: unknown): data is { data: Array<{ embedding: 
 }
 
 /**
- * Shared fetch+validate logic for OpenAI-compatible embedding APIs.
- * Handles: POST -> check response.ok -> parse JSON -> guard shape -> extract embeddings.
+ * Replaces lone UTF-16 surrogates with U+FFFD. A symbol's text is its source cut at a fixed number of
+ * code units, which can split an emoji in half; JSON.stringify then writes the lone half as an escape
+ * that is not valid UTF-8, and Voyage rejected the whole batch (HTTP 400) — measured 2026-10-15, it
+ * stopped rdesigner's symbol pass at 205,312 of 498,163.
  */
+export function wellFormed(text: string): string {
+  return text.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+}
+
 /**
  * Node gives each address of a host 250 ms to connect before trying the next one. Measured
  * 2026-10-15 on this Mac at load ~35: a TCP connect to openrouter.ai took 280 ms, IPv6 was
@@ -204,6 +210,10 @@ function isEmbeddingResponse(data: unknown): data is { data: Array<{ embedding: 
  */
 const REMOTE_CONNECT_ATTEMPT_MS = 2_000;
 
+/**
+ * Shared fetch+validate logic for OpenAI-compatible embedding APIs.
+ * Handles: POST -> check response.ok -> parse JSON -> guard shape -> extract embeddings.
+ */
 async function fetchEmbeddings(
   url: string,
   apiKey: string,
@@ -219,6 +229,7 @@ async function fetchEmbeddings(
   // batches used before this scaled.
   const inputs = requestBody["input"];
   const texts = Array.isArray(inputs) ? inputs.filter((x): x is string => typeof x === "string") : [];
+  if (Array.isArray(inputs)) requestBody = { ...requestBody, input: inputs.map((x) => typeof x === "string" ? wellFormed(x) : x) };
 
   const response = await fetch(url, {
     method: "POST",
