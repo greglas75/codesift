@@ -376,7 +376,8 @@ function contentHash(text: string): number {
 /** An embedding id without its trailing `:line` — `repo:file:name` for a symbol, `repo:file` for a chunk. */
 function withoutLine(id: string): string {
   const cut = id.lastIndexOf(":");
-  return cut > 0 ? id.slice(0, cut) : id;
+  // Only a numeric tail is a line: any other id keeps its full name and is matched as before.
+  return cut > 0 && /^\d+$/.test(id.slice(cut + 1)) ? id.slice(0, cut) : id;
 }
 
 /** Stored vectors keyed by place (id without line) and content hash; only ids with a known hash. */
