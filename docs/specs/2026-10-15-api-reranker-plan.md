@@ -5,7 +5,7 @@
 **planning_mode:** inline
 **source_of_truth:** inline brief
 **plan_revision:** 5
-**status:** Reviewed
+**status:** Approved
 **Created:** 2026-10-15
 **Tasks:** 10
 **Estimated complexity:** 3 standard, 7 complex
@@ -179,7 +179,7 @@ only shrink or gain a branch):
     loop.
   - accepted as notes (stop rule, no re-split): Task 4 and Task 8 bundling — both carry boundary
     justifications the plan reviewer approved; Task 10 verify chain (INFO).
-- Status gate: Reviewed
+- Status gate: Approved (owner, 2026-10-15)
 
 ## Task Breakdown
 
