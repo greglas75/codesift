@@ -2,6 +2,34 @@
 
 ## [Unreleased]
 
+## [0.26.0] — 2026-10-15
+
+Embeddings can come from any OpenAI-compatible API (OpenRouter + `voyageai/voyage-4-lite` here), and
+a worktree reuses the vectors it already has instead of paying for them again.
+
+### Added
+
+- **`CODESIFT_OPENAI_BASE_URL` / `CODESIFT_OPENAI_MODEL` / `CODESIFT_OPENAI_DIMENSIONS`** point the
+  `openai` provider at any OpenAI-compatible endpoint. Picked by a retrieval benchmark of 15
+  non-Chinese OpenRouter models on this repo (300 docstring queries over 2,569 functions):
+  voyage-4-lite MRR 0.878 with `input_type`, ~$0.75 for rdesigner's 498k symbols. A voyage model is
+  told which side a text is on; vectors of another width than configured are refused.
+- **`CODESIFT_EMBEDDING_CONCURRENCY`**: embedding batches in flight at once, 4 by default for a remote
+  API (1 for a local model or a loopback server). A batch that fails no longer discards the ones that
+  succeeded beside it.
+
+### Fixed
+
+- **An embedding run reuses its stored vectors whatever their size.** The resident-cache budget used
+  to bound that load; rdesigner's 1024-dim vectors (~2.0 GB) were over it, so every worktree that had
+  cloned them re-embedded all 498k symbols (~$1 each on OpenRouter).
+- **Text that only moved to another line keeps its vector.** Ids end in the line number, so a line
+  added near the top of a file re-embedded every symbol and chunk below it.
+- **Node's 250 ms per-address connect cut-off** failed every request to OpenRouter on a loaded Mac
+  (TCP connect 280 ms, IPv6 unreachable); remote embedding calls now allow 2 s.
+- **Lone UTF-16 surrogates** (a source cut in the middle of an emoji) are replaced before a request:
+  Voyage rejected the whole batch with HTTP 400.
+
 ## [0.25.0] — 2026-10-14
 
 A linked worktree's index stops being a full copy of its donor: it holds only the files it changed
