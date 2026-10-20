@@ -414,3 +414,17 @@ lifecycle id pairing, a cross-root cap on concurrent index children. What follow
   multi-page early-stop, the 200-symbol framework sample boundary and the stale-index → not-found
   invariant are untested; `index-out-of-process` has no crash/no-marker/bad-request child case.
 - [ ] B-pre-tool-use-BUG-670209c5 src/cli/hooks/pre-tool-use.ts:376 — [BUG] precheck-bash denies grep/find even when the session's CodeSift MCP is disconnected and when the paths are outside the indexed repo, leaving the agent with no search tool | evidence: zuvo-plugin session 2026-10-15/18: MCP reported 'codesift (ECONNREFUSED)' and its tools were removed, yet `grep -rl … ~/.claude/hooks` and `find ~/.zuvo/bench …` were denied 'Current repo is indexed by CodeSift'. isCodesiftServerRunning (shared.ts:62) checks for ANY server process via ps, not this session's connection; the path arguments are never compared with the indexed repo root | fix: skip the deny when every path argument resolves outside the indexed repo, and probe the server endpoint the session uses (or the session's MCP status) instead of ps | severity: medium | source: drive-by:dup-map | conf: 85 | seen: 1 | ledger: F-670209c5c2af | 2026-10-18
+
+## B-PRECHECK-BASH-OUTSIDE-REPO precheck-bash blocks grep/rg that searches OUTSIDE the indexed repo (2026-10-18, codesift 0.26.0)
+
+- **What:** The PreToolUse hook `codesift precheck-bash` refused every grep/rg command while the session's cwd
+  was an indexed repo, including `cd ~/DEV && rg -l … .` (a sweep across ~30 sibling repos, most of them not
+  indexed) and `grep -rniE … scripts/lib/*.sh`. The message was "Current repo is indexed by CodeSift. Use
+  CodeSift MCP tools instead". search_text cannot reach repos that are not indexed, so the agent fell back to a
+  python os.walk script. That script did the same search with no guard, ran slower and timed out into the
+  background.
+- **Fix:** resolve the command's search root (the `cd` target and the path arguments). Block only when the root
+  lies inside an indexed repo. Allow when it is a parent of several repos or an unindexed directory, and say
+  why in the hint. Regression: `cd ~/DEV && rg -l foo .` passes; `rg foo src/` inside an indexed repo is still
+  blocked.
+- Source: zuvo-plugin session 2026-10-18 (observed twice).
