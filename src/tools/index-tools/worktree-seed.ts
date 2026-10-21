@@ -63,6 +63,9 @@ export interface SeedResult {
 
 /** How far back `HEAD`'s history is searched for a donor's commit. */
 const DONOR_HISTORY_DEPTH = 5_000;
+/** Off-history candidates measured per seed (one `git rev-list` each), and how many at once. */
+const DIVERGED_CANDIDATE_LIMIT = 200;
+const DIVERGED_CONCURRENCY = 8;
 
 /**
  * Seed `worktreeRoot`'s index from its parent checkout's, if that is possible and safe.
@@ -106,6 +109,9 @@ const DONOR_HISTORY_DEPTH = 5_000;
  * committed content is this repository's content at that commit; the catch-up then covers the gap and
  * the ceiling still guards a donor that is near in commits but far in files. Ties go to a donor that
  * already has vectors, since those are cloned along with the index.
+ *
+ * The caller's map also holds siblings OFF that history (`withDivergedDistances`, 2026-10-18): the
+ * catch-up diffs `donor..HEAD` by content, which needs no ancestry, only a commit git knows.
  */
 export async function pickSeedDonor(
   registryPath: string,
@@ -158,6 +164,48 @@ export async function pickSeedDonor(
     sameCommit: best.distance === 0,
     distance: best.distance,
   };
+}
+
+/**
+ * `history` plus the indexed commits OFF this tree's history, each at its distance from HEAD through
+ * their merge base (commits on HEAD's side + commits on the other side).
+ *
+ * History alone could not see a sibling: worktrees cut from one develop commit each sit on their own
+ * feature commit, so none is an ancestor of another, and each seeded from the newest ANCESTOR that had
+ * an index. Measured 2026-10-18 on rdesigner: `ux-e2e-fix-1018` and `tgm-wt-labfix-gaps-cj`, a commit
+ * or two apart, both seeded from a worktree 30 merges back (3,691 files differ > 2,881 — full index)
+ * and took chunk vectors from one 226 commits back; each re-embedded ~0.75 USD of what the other had
+ * just embedded. `git rev-list` succeeding on the sha is the proof it is this repository's commit.
+ */
+export async function withDivergedDistances(
+  worktreeRoot: string,
+  history: ReadonlyMap<string, number>,
+  commits: Iterable<string | undefined>,
+): Promise<Map<string, number>> {
+  const result = new Map(history);
+  const pending = [...new Set([...commits].filter((c): c is string => !!c && !history.has(c)))]
+    .slice(0, DIVERGED_CANDIDATE_LIMIT);
+  for (let i = 0; i < pending.length; i += DIVERGED_CONCURRENCY) {
+    await Promise.all(pending.slice(i, i + DIVERGED_CONCURRENCY).map(async (sha) => {
+      const out = await runGit(["rev-list", "--count", "--left-right", `HEAD...${sha}`], {
+        cwd: worktreeRoot,
+        timeout: 5_000,
+      }).catch(() => null);
+      const [ours, theirs] = (out ?? "").trim().split(/\s+/).map(Number);
+      if (Number.isInteger(ours) && Number.isInteger(theirs)) result.set(sha, ours! + theirs!);
+    }));
+  }
+  return result;
+}
+
+/** Indexed commits of `repoName`'s checkouts (its name before a worktree's `@`), newest index first. */
+export async function familyCommits(registryPath: string, repoName: string): Promise<string[]> {
+  const { listRepos } = await import("../../storage/registry.js");
+  const family = (name: string) => name.split("@")[0];
+  return (await listRepos(registryPath).catch(() => []))
+    .filter((c) => family(c.name) === family(repoName) && c.last_git_commit)
+    .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))
+    .map((c) => c.last_git_commit!);
 }
 
 /** sha → commits back from HEAD, for `pickSeedDonor`. Empty when git cannot answer. */
@@ -230,7 +278,10 @@ export async function seedWorktreeIndexFromParent(
   }
 
   const donor = await pickSeedDonor(
-    config.registryPath, parentName, parent, worktreeHead, await headHistory(worktreeRoot),
+    config.registryPath, parentName, parent, worktreeHead,
+    await withDivergedDistances(
+      worktreeRoot, await headHistory(worktreeRoot), await familyCommits(config.registryPath, parentName),
+    ),
   );
 
   const parentDb = sqlitePathFor(donor.index_path);

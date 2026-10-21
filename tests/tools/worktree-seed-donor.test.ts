@@ -10,10 +10,11 @@
 // the SAME develop commit. The first pays a full index; the other nine are byte-identical to it and
 // each paid their own, because the only donor ever considered was on an unrelated branch.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { pickSeedDonor } from "../../src/tools/index-tools/worktree-seed.js";
+import { headHistory, pickSeedDonor, withDivergedDistances } from "../../src/tools/index-tools/worktree-seed.js";
 import { registerRepo } from "../../src/storage/registry.js";
 import { sqlitePathFor } from "../../src/storage/index-store.js";
 
@@ -156,5 +157,39 @@ describe("pickSeedDonor — nearest commit in HEAD's history", () => {
     const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
 
     expect(donor.name).toBe("vectors");
+  });
+});
+
+// Measured 2026-10-18: two rdesigner worktrees a commit or two apart, each on its own feature branch,
+// both seeded from an ANCESTOR 30 merges back (full index) and took chunk vectors from one 226 back —
+// the history above never holds a sibling's commit, so each re-paid what the other had just embedded.
+describe("withDivergedDistances — siblings off this tree's history", () => {
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
+  const commit = (cwd: string, file: string) => {
+    writeFileSync(join(cwd, file), file);
+    git(cwd, "add", file);
+    git(cwd, "commit", "-qm", file);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+
+  it("ranks a sibling branch one commit off the shared base above an ancestor far back", async () => {
+    const repo = join(dir, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "develop");
+    const old = commit(repo, "old.txt");
+    for (let i = 0; i < 5; i++) commit(repo, `develop-${i}.txt`);
+    git(repo, "checkout", "-qb", "sibling");
+    const sibling = commit(repo, "sibling.txt");
+    git(repo, "checkout", "-q", "develop");
+    git(repo, "checkout", "-qb", "mine");
+    commit(repo, "mine.txt");
+
+    const distances = await withDivergedDistances(repo, await headHistory(repo), [sibling, old, "f".repeat(40)]);
+
+    expect(distances.get(sibling)).toBe(2);
+    expect(distances.get(old)).toBe(6);
+    // A sha git does not know is not this repository's content and gets no distance.
+    expect(distances.has("f".repeat(40))).toBe(false);
   });
 });

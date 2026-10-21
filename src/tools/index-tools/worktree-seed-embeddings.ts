@@ -210,11 +210,18 @@ async function nearestDonor(
   repoName: string,
   has: (candidate: RepoMeta) => Promise<boolean>,
 ): Promise<{ name: string; index_path: string; distance: number | null } | undefined> {
-  const { headHistory } = await import("./worktree-seed.js");
+  const { headHistory, withDivergedDistances, familyCommits } = await import("./worktree-seed.js");
   const { listRepos } = await import("../../storage/registry.js");
   const { loadConfig } = await import("../../config.js");
-  const history = await headHistory(rootPath).catch(() => new Map<string, number>());
-  const candidates = (await listRepos(loadConfig().registryPath).catch(() => [])).filter((c) => c.name !== repoName);
+  const registryPath = loadConfig().registryPath;
+  // Siblings on their own branches count too, at their distance through the merge base — the
+  // vectors of a worktree one commit off this one beat those of an ancestor 226 commits back.
+  const history = await withDivergedDistances(
+    rootPath,
+    await headHistory(rootPath).catch(() => new Map<string, number>()),
+    await familyCommits(registryPath, repoName),
+  ).catch(() => new Map<string, number>());
+  const candidates = (await listRepos(registryPath).catch(() => [])).filter((c) => c.name !== repoName);
 
   let best: { name: string; index_path: string; distance: number } | undefined;
   for (const candidate of candidates) {
