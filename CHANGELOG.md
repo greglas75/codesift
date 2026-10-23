@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [0.26.2] — 2026-10-23
+
+### Fixed
+
+- **Codex waits 120 s for the CodeSift handshake instead of its 30 s default.** CodeSift is
+  `required = true`, so a late handshake ended the session before its first turn: every caretaker take
+  that died at start on the sessions host (2026-10-13 ×2, 10-14, 10-19) was "codesift: timed out
+  handshaking with MCP server after 30s" while the daemon was indexing. `setup codex` writes
+  `startup_timeout_sec = 120` and adds it to an existing entry that has none; an explicit value is kept.
+  An unreachable daemon still fails at once (connection refused).
+
 ## [0.26.1] — 2026-10-23
 
 A new worktree seeds its index from the right donor again, instead of paying a full index.
