@@ -29,7 +29,7 @@ function indexPathFor(name: string): string {
 }
 
 /** A donor is only usable if its database actually exists, so the fixture creates one. */
-async function register(name: string, commit: string | undefined, withDb = true): Promise<string> {
+async function register(name: string, commit: string | undefined, withDb = true, fileCount?: number): Promise<string> {
   const index_path = indexPathFor(name);
   if (withDb) writeFileSync(sqlitePathFor(index_path), "");
   await registerRepo(registryPath, {
@@ -37,6 +37,7 @@ async function register(name: string, commit: string | undefined, withDb = true)
     root: join(dir, name),
     index_path,
     ...(commit !== undefined ? { last_git_commit: commit } : {}),
+    ...(fileCount !== undefined ? { file_count: fileCount } : {}),
   } as never);
   return index_path;
 }
@@ -157,6 +158,27 @@ describe("pickSeedDonor — nearest commit in HEAD's history", () => {
     const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
 
     expect(donor.name).toBe("vectors");
+  });
+
+  // Measured 2026-10-23: a worktree indexed only through include_paths (0–4 files) sat nearest in
+  // history, every new caretaker worktree picked it, the seed came out empty and each paid a full index.
+  it("passes over a near-empty index at a closer commit", async () => {
+    await register("parent", PARENT_COMMIT, true, 30_000);
+    await register("scoped", near, true, 4);
+    await register("full", far, true, 30_100);
+
+    const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
+
+    expect(donor.name).toBe("full");
+  });
+
+  it("falls back to the parent when the only close sibling is near-empty", async () => {
+    await register("parent", PARENT_COMMIT, true, 30_000);
+    await register("empty", HEAD, true, 0);
+
+    const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD, history);
+
+    expect(donor.name).toBe("parent");
   });
 });
 

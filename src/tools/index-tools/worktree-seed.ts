@@ -134,17 +134,30 @@ export async function pickSeedDonor(
   const distanceOf = (commit: string | undefined): number | undefined =>
     commit === undefined ? undefined : commit === worktreeHead ? 0 : history?.get(commit);
 
-  type Candidate = { name: string; root: string; index_path: string; last_git_commit?: string | undefined };
+  type Candidate = {
+    name: string; root: string; index_path: string; last_git_commit?: string | undefined; file_count?: number | undefined;
+  };
   const { listRepos } = await import("../../storage/registry.js");
   const registered = (await listRepos(registryPath).catch(() => [])) as Candidate[];
   // The parent first, so it wins a tie it is part of — the behaviour before siblings were considered.
-  const pool: Candidate[] = [{ name: parentName, ...parent }, ...registered.filter((c) => c.name !== parentName)];
+  const parentRow = registered.find((c) => c.name === parentName);
+  const pool: Candidate[] = [
+    { name: parentName, ...parent, file_count: parentRow?.file_count },
+    ...registered.filter((c) => c.name !== parentName),
+  ];
+  // A worktree indexed only through `include_paths` holds a few files of the tree, and one whose walk
+  // found nothing holds none — at the nearest commit they still won. Measured 2026-10-23 on the
+  // sessions host: from 08:36 every new caretaker worktree of rdesigner picked a 0-file index, the seed
+  // declined ("parent index is empty") and each paid a full index of 31k files, 35–70 min at ~7 cores.
+  const largest = Math.max(0, ...pool.map((c) => c.file_count ?? 0));
+  const isPartial = (c: Candidate): boolean => c.file_count !== undefined && c.file_count < largest / 2;
 
   let best: { candidate: Candidate; distance: number } | undefined;
   for (const candidate of pool) {
     const distance = distanceOf(candidate.last_git_commit);
     if (distance === undefined) continue;
     if (best && distance > best.distance) continue;
+    if (isPartial(candidate)) continue;
     // A registry row is not an index: copying from a database that is not there fails after the
     // decision, when another donor was available all along.
     if (!existsSync(sqlitePathFor(candidate.index_path))) continue;
