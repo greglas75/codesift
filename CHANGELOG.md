@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+## [0.26.1] — 2026-10-23
+
+A new worktree seeds its index from the right donor again, instead of paying a full index.
+
+### Fixed
+
+- **A near-empty index is no longer picked as a seed donor.** A worktree indexed only through
+  `include_paths`, or whose walk found nothing, registers with a handful of files and still won at the
+  nearest commit. The overlay came out empty ("parent index is empty") and the new worktree paid a
+  full index: on 2026-10-23 every new rdesigner caretaker worktree indexed ~31k files, 35–70 min at
+  ~7 cores each, which overloaded the sessions host. A candidate with under half the files of the
+  largest index in its family is now passed over.
+- **Worktrees seed index and vectors from sibling branches**, not only from commits in their own
+  history. Worktrees cut from one develop commit each sit on their own feature commit, so each seeded
+  from an ancestor far back (best donor 239 → 51 commits on the live registry).
+
 ## [0.26.0] — 2026-10-15
 
 Embeddings can come from any OpenAI-compatible API (OpenRouter + `voyageai/voyage-4-lite` here), and
