@@ -86,6 +86,33 @@ function ensureCodesiftRequired(
   };
 }
 
+/**
+ * `required = true` turns a slow handshake into a dead session, and Codex gives up after 30 s by
+ * default. Every caretaker failure on the sessions host (2026-10-13 ×2, 10-14, 10-19) was
+ * "codesift: timed out handshaking with MCP server after 30s" on a daemon that had accepted the
+ * connection and answered late while it was indexing — the take died before its first turn. An
+ * unreachable daemon is still refused at once (connection refused fails in ~2 s whatever this says),
+ * so the longer wait only covers a stall. An explicit value the owner set is left alone.
+ */
+const CODEX_STARTUP_TIMEOUT_SEC = 120;
+
+function ensureCodesiftStartupTimeout(
+  content: string,
+): { content: string; changed: boolean } {
+  const found = extractCodesiftTomlBlock(content);
+  if (!found || /^startup_timeout_(?:sec|ms)[\t ]*=/m.test(found.block)) return { content, changed: false };
+  const prefix = content.slice(0, found.end).replace(/\n?$/, "\n");
+  const suffix = content.slice(found.end);
+  return {
+    content:
+      prefix +
+      `startup_timeout_sec = ${CODEX_STARTUP_TIMEOUT_SEC}` +
+      (suffix.startsWith("\n") || suffix === "" ? "" : "\n") +
+      suffix,
+    changed: true,
+  };
+}
+
 function jsonString(value: string): string {
   return JSON.stringify(value);
 }
@@ -120,6 +147,7 @@ function getCodexTomlBlock(options?: SetupOptions): string {
   return (
     "\n[mcp_servers.codesift]\n" +
     getCodexServerEntryLines(options) +
+    `\nstartup_timeout_sec = ${CODEX_STARTUP_TIMEOUT_SEC}` +
     '\ntool_timeout_sec = 120\nrequired = true\ndefault_tools_approval_mode = "approve"\n'
   );
 }
@@ -292,14 +320,15 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   const normalizedEntry = normalizeCodesiftTomlServerEntry(envStripped.content, options);
   const normalized = ensureCodesiftDefaultToolsApprovalApprove(normalizedEntry.content);
   const required = ensureCodesiftRequired(normalized.content);
-  const content = required.content;
+  const startup = ensureCodesiftStartupTimeout(required.content);
+  const content = startup.content;
   const noteFields =
     removed > 0
       ? { note: "removed " + removed + " per-tool approval override" + (removed === 1 ? "" : "s") + " on mcp_servers.codesift" }
       : {};
 
   if (content.includes("[mcp_servers.codesift]")) {
-    if (removed > 0 || envStripped.changed || normalized.changed || normalizedEntry.changed || required.changed) {
+    if (removed > 0 || envStripped.changed || normalized.changed || normalizedEntry.changed || required.changed || startup.changed) {
       await writeSecretFile(configPath, content);
       return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
     }

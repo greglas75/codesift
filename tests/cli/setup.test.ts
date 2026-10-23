@@ -143,7 +143,7 @@ describe("setup", () => {
       await mkdir(configDir, { recursive: true });
       await writeFile(
         join(configDir, "config.toml"),
-        '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nrequired = true\ndefault_tools_approval_mode = "approve"\n',
+        '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nstartup_timeout_sec = 120\nrequired = true\ndefault_tools_approval_mode = "approve"\n',
         "utf-8",
       );
 
@@ -151,7 +151,7 @@ describe("setup", () => {
       expect(result.status).toBe("already_configured");
 
       const content = await readFile(result.config_path, "utf-8");
-      expect(content).toBe('[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nrequired = true\ndefault_tools_approval_mode = "approve"\n');
+      expect(content).toBe('[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nstartup_timeout_sec = 120\nrequired = true\ndefault_tools_approval_mode = "approve"\n');
     });
 
     it("forces an existing CodeSift server to be required", async () => {
@@ -169,6 +169,37 @@ describe("setup", () => {
       const content = await readFile(result.config_path, "utf-8");
       expect(content).toContain("required = true");
       expect(content).not.toContain("required = false");
+    });
+
+    // Every caretaker take that died at start on the sessions host (2026-10-13..19) was "codesift:
+    // timed out handshaking with MCP server after 30s" — Codex's default, with required = true.
+    it("gives an existing CodeSift server a startup timeout longer than Codex's 30 s default", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "config.toml"),
+        '[mcp_servers.codesift]\nurl = "http://127.0.0.1:7077/mcp?client=codex"\nrequired = true\ndefault_tools_approval_mode = "approve"\n[projects."/x"]\ntrust_level = "trusted"\n',
+        "utf-8",
+      );
+
+      const result = await setup("codex");
+      expect(result.status).toBe("updated");
+
+      const content = await readFile(result.config_path, "utf-8");
+      // Inside the codesift table, not appended to whichever table happens to come last.
+      expect(content).toMatch(/\[mcp_servers\.codesift\](?:(?!\n\[)[\s\S])*\nstartup_timeout_sec = 120\n\[projects/);
+    });
+
+    it("keeps a startup timeout the owner set explicitly", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      const original = '[mcp_servers.codesift]\ncommand = "/usr/local/bin/codesift-mcp"\nargs = []\nstartup_timeout_sec = 45\nrequired = true\ndefault_tools_approval_mode = "approve"\n';
+      await writeFile(join(configDir, "config.toml"), original, "utf-8");
+
+      const result = await setup("codex");
+
+      expect(result.status).toBe("already_configured");
+      expect(await readFile(result.config_path, "utf-8")).toBe(original);
     });
 
     it("migrates legacy npx/dist-server codex entries to the stable wrapper shape", async () => {
