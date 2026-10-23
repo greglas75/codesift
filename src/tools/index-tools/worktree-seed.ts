@@ -161,6 +161,10 @@ export async function pickSeedDonor(
     // A registry row is not an index: copying from a database that is not there fails after the
     // decision, when another donor was available all along.
     if (!existsSync(sqlitePathFor(candidate.index_path))) continue;
+    // A removed worktree stays registered until prune, and its base snapshot runs `git status` in its
+    // root: measured 2026-10-23, a caretaker worktree picked a deleted sibling, the seed failed with
+    // "spawn git ENOENT" and the tree paid a full index of 31k files.
+    if (!existsSync(candidate.root)) continue;
     if (best && distance === best.distance) {
       const { hasSymbolEmbeddings } = await import("./worktree-seed-embeddings.js");
       if (await hasSymbolEmbeddings(best.candidate.index_path)) continue;

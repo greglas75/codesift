@@ -29,9 +29,12 @@ function indexPathFor(name: string): string {
 }
 
 /** A donor is only usable if its database actually exists, so the fixture creates one. */
-async function register(name: string, commit: string | undefined, withDb = true, fileCount?: number): Promise<string> {
+async function register(
+  name: string, commit: string | undefined, withDb = true, fileCount?: number, rootExists = true,
+): Promise<string> {
   const index_path = indexPathFor(name);
   if (withDb) writeFileSync(sqlitePathFor(index_path), "");
+  if (rootExists) mkdirSync(join(dir, name), { recursive: true });
   await registerRepo(registryPath, {
     name,
     root: join(dir, name),
@@ -108,6 +111,16 @@ describe("pickSeedDonor", () => {
 
     expect(donor.name).toBe("parent");
     expect(donor.sameCommit).toBe(false);
+  });
+
+  it("ignores a matching sibling whose worktree was removed", async () => {
+    // Registered until prune, but its base snapshot runs git in a root that is gone (spawn ENOENT).
+    await register("parent", PARENT_COMMIT);
+    await register("removed", HEAD, true, undefined, false);
+
+    const donor = await pickSeedDonor(registryPath, "parent", parentEntry(), HEAD);
+
+    expect(donor.name).toBe("parent");
   });
 });
 
