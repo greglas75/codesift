@@ -20,6 +20,46 @@ import { attachOverlay } from "./overlay.js";
 const connections = new Map<string, DatabaseSyncType>();
 
 /**
+ * The file each cached connection was opened on, as `dev:ino`.
+ *
+ * The cache is keyed by PATH, and the file under a path can go away: cc-cleanup removes the index
+ * of an idle worktree, a reset replaces it. A cached handle then keeps the DELETED inode open for
+ * the life of the process — its disk space is never freed, and writes through it land in a file
+ * nobody will read again. Measured 2026-10-27 on the sessions host: one codesift-mcp held 782
+ * deleted `*.index.db`/`-wal` descriptors (16 GB), ~180 GB across the host with / at 42 GB free.
+ */
+const identities = new Map<string, string>();
+
+function fileIdentity(dbPath: string): string | undefined {
+  try {
+    const st = statSync(dbPath);
+    return `${st.dev}:${st.ino}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function isStale(dbPath: string): boolean {
+  return dbPath !== ":memory:" && fileIdentity(dbPath) !== identities.get(dbPath);
+}
+
+/** How often an open sweeps the WHOLE cache — an index nobody opens again is only ever reached here. */
+export const STALE_SWEEP_INTERVAL_MS = 60_000;
+let lastSweep = 0;
+
+/** Close every cached connection whose file was deleted or replaced. Returns how many it closed. */
+export function closeStaleIndexDbs(): number {
+  let closed = 0;
+  for (const path of [...connections.keys()]) {
+    if (isStale(path)) {
+      closeIndexDb(path);
+      closed++;
+    }
+  }
+  return closed;
+}
+
+/**
  * ROLLBACK that cannot replace the error that caused it.
  *
  * SQLite rolls back automatically on the faults that matter most here — `SQLITE_FULL`,
@@ -66,8 +106,16 @@ const opening = new Map<string, Promise<DatabaseSyncType>>();
  * an agent edits files faster than the previous write settles.
  */
 export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
+  const now = Date.now();
+  if (now - lastSweep >= STALE_SWEEP_INTERVAL_MS) {
+    lastSweep = now;
+    closeStaleIndexDbs();
+  }
   const cached = connections.get(dbPath);
-  if (cached) return cached;
+  if (cached) {
+    if (!isStale(dbPath)) return cached;
+    closeIndexDb(dbPath);
+  }
 
   const inFlight = opening.get(dbPath);
   if (inFlight) return inFlight;
@@ -193,6 +241,8 @@ async function openUncachedIndexDb(dbPath: string): Promise<DatabaseSyncType> {
   }
 
   connections.set(dbPath, db);
+  const identity = fileIdentity(dbPath);
+  if (identity !== undefined) identities.set(dbPath, identity);
   return db;
 }
 
@@ -242,6 +292,7 @@ export function closeIndexDb(dbPath: string): void {
   const db = connections.get(dbPath);
   if (!db) return;
   connections.delete(dbPath);
+  identities.delete(dbPath);
   try {
     // Close is the one moment this process is provably done reading through THIS handle, so it is
     // the checkpoint most likely to succeed. Unconditional rather than threshold-gated: leaving a
