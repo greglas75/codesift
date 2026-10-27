@@ -1,0 +1,289 @@
+artifact_kind=adversarial-review
+created_at=2026-10-27T09:14:37Z
+status=ok
+mode=code
+output_format=text
+providers_used=codex-5.3, byteplus-alt, byteplus-3, zai, claude
+provider_count=5
+providers_attempted=5
+provider_outcomes=codex-5.3:ok,byteplus-alt:ok,byteplus-3:ok,zai:ok,claude:ok
+adversarial_pass=1/3
+REVIEW BY: CODEX-5.3
+REVIEW BY: BYTEPLUS-ALT
+REVIEW BY: BYTEPLUS-3
+REVIEW BY: ZAI
+REVIEW BY: CLAUDE
+input_chars=5480
+input_chars_original=5480
+input_truncated=false
+total_findings=23
+critical=5
+warning=15
+info=3
+count_method=severity-records
+count_status=partial
+known_findings_supplied=0
+---
+===============================================================
+CROSS-PROVIDER ADVERSARIAL REVIEW
+===============================================================
+Providers: codex-5.3, byteplus-alt, byteplus-3, zai, claude (5 total)
+Mode: code
+Input size: 5480 chars
+Date: 2026-10-27T09:14:37Z
+===============================================================
+
+
+###############################################################
+###   PROVIDER: CODEX-5.3
+###############################################################
+
+SEVERITY: WARNING  
+CONFIDENCE: high  
+FILE: src/storage/sqlite/connection.ts:109  
+ID: connection.ts:109-stale-sweep-closes-active-handles  
+ISSUE: The sweep closes a cached connection based only on file identity, even if a caller is still using it.  
+ATTACK VECTOR: Another `openIndexDb()` call triggers the sweep after an index is deleted or replaced. A caller holding the earlier handle then fails during an in-progress operation.  
+SUGGESTED FIX: Track active users or operations and defer closing a stale handle until they finish.
+
+SEVERITY: WARNING  
+CONFIDENCE: high  
+FILE: src/storage/sqlite/connection.ts:36  
+ID: connection.ts:36-stat-failure-marks-valid-handle-stale  
+ISSUE: Every `statSync` error is treated as a missing file.  
+ATTACK VECTOR: A transient filesystem error causes `isStale()` to close a valid cached connection, interrupting users of that handle.  
+SUGGESTED FIX: Treat only `ENOENT` as a missing file; propagate or handle other errors without closing the connection.
+
+SEVERITY: WARNING  
+CONFIDENCE: medium  
+FILE: src/storage/sqlite/connection.ts:244  
+ID: connection.ts:244-missing-identity-repeatedly-closes-connection  
+ISSUE: If identity lookup fails immediately after opening, the connection is cached without an identity and will be considered stale on the next access.  
+ATTACK VECTOR: A transient stat failure at open causes a valid connection to be closed when another caller opens the same path.  
+SUGGESTED FIX: Require a successful identity lookup before caching the handle, or represent an unknown identity separately from a stale one.
+
+
+###############################################################
+###   PROVIDER: BYTEPLUS-ALT
+###############################################################
+
+I reviewed the diff adversarially. The new stale-detection/cache-closing logic has several correctness and operational hazards that happy-path tests (which call `closeStaleIndexDbs()` manually) won't reveal. Findings below, sorted by severity then confidence.
+
+---
+
+SEVERITY: CRITICAL
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:56
+ID: connection.ts:56:sweep-closes-in-use-handles
+ISSUE: `closeStaleIndexDbs()` closes connections purely from filesystem state, but callers hold the very handles it closes; this violates `closeIndexDb`'s own stated invariant that closing happens only "when this process is provably done reading through THIS handle."
+ATTACK VECTOR: A caller does `const db = await openIndexDb(p); … await something; … db.prepare(...)`. Meanwhile another `openIndexDb` of a different path fires the 60s sweep, sees `p` stale (file replaced/deleted, or with finding #2 a stat blip), and calls `closeIndexDb(p)`. The caller's subsequent statement throws on a closed handle; if it had an open transaction, `db.close()` rolls it back → silent write loss. The tests never exercise a handle held across an await while the sweep runs, so this passes CI.
+SUGGESTED FIX: Track per-path usage/refcounts (increment on open-return, decrement on release) and skip closing a path with active holders; defer stale-close until refcount hits 0.
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:38
+ID: connection.ts:38:stat-error-masquerades-deleted
+ISSUE: `fileIdentity`'s bare `catch { return undefined }` treats every stat failure (EMFILE, EACCES, EIO, EPERM) as "file deleted," so `isStale` returns true for a perfectly valid connection.
+ATTACK VECTOR: This very change targets a process leaking 782 descriptors and 16 GB — i.e. a process already near fd exhaustion. Under that pressure `statSync` can fail with EMFILE for many paths at once; the next sweep then declares the entire cache stale and closes all of them, handing in-use callers closed handles (see #1) and inflicting a reopen storm. A momentary permission change on a directory does the same. The doc comment "whose file was deleted or replaced" is contradicted by this over-broad catch.
+SUGGESTED FIX: In the catch, distinguish `ENOENT`/`ENOTDIR` (treat as stale) from all other errnos (treat as "unknown → do NOT close"); e.g. rethrow or return a sentinel that makes `isStale` return false.
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:113
+ID: connection.ts:113:sync-stat-on-hot-path
+ISSUE: Every `openIndexDb` for a cached path now performs a synchronous `statSync` (`isStale`), and the sweep does N synchronous stats + closes in one tick — blocking the event loop on the hot path.
+ATTACK VECTOR: An MCP server that opens the same index many times per request pays a blocking `stat()` on every open; with the failure scenario the code was written for (hundreds of cached connections), the periodic sweep issues hundreds of blocking syscalls back-to-back, stalling all concurrent async work (proxy timeouts, request bursts). No test measures this because they open once.
+SUGGESTED FIX: Cache the identity check result with a short TTL, or make the sweep async/`stat` in parallel off the request path; avoid per-call `statSync` on the cached-return branch.
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:47
+ID: connection.ts:47:sweep-only-on-open
+ISSUE: The "every 60s" sweep is only invoked opportunistically inside `openIndexDb`; there is no timer. A process that stops opening databases never sweeps, so deleted-inode handles are never released — the exact leak this change claims to fix.
+ATTACK VECTOR: A worktree goes idle after cc-cleanup deletes its index; if the process then opens no other index, `closeStaleIndexDbs` never runs and the deleted inode (and its WAL) stays pinned for the process lifetime. The test asserting "the sweep closes a deleted index that nobody opens again" calls `closeStaleIndexDbs()` by hand, giving false confidence that idle indexes are reclaimed automatically.
+SUGGESTED FIX: Drive the sweep from a timer (`setInterval(..., STALE_SWEEP_INTERVAL_MS).unref()`), not only from `openIndexDb`; or document that reclamation is open-triggered and adjust the test to exercise the timer path.
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: low
+FILE: src/storage/sqlite/connection.ts:245
+ID: connection.ts:245:unrecorded-identity-never-stale
+ISSUE: When `fileIdentity` returns `undefined` at open time, `identities.set` is skipped; thereafter `isStale` compares `undefined !== undefined` → false, so that path is never detected as stale.
+ATTACK VECTOR: A path that SQLite can open but `statSync` cannot resolve for the raw string (e.g. a `file:`/URI-style `dbPath`, a symlink loop, or a transient error at open) gets cached with no identity record and becomes permanently "not stale" — the leak the change targets silently persists for exactly those paths, and no test covers a `dbPath` other than a plain file or the literal `:memory:`.
+SUGGESTED FIX: Store a sentinel/`null` identity for un-stattable paths (or refuse to enable stale-detection for them) and make `isStale` treat "no recorded identity" as stale rather than "equal → not stale"; or restrict detection to plain filesystem paths like `:memory:` is excluded.
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: low
+FILE: src/storage/sqlite/connection.ts:36
+ID: connection.ts:36:statSync-no-import
+ISSUE: The added code calls `statSync` but the diff adds no import for it; if it isn't already imported in the unseen header (lines 1–18), the module fails to compile.
+ATTACK VECTOR: Build/CI breaks with "statSync is not defined" the moment this lands, or—worse—a residual unused-import lint suppression hides it until runtime. The provided diff contains no import hunk despite introducing a new Node `fs` symbol.
+SUGGESTED FIX: Confirm `import { statSync } from "node:fs"` (or the project's existing fs import) is present at the top of `connection.ts`; add it if missing.
+
+
+###############################################################
+###   PROVIDER: BYTEPLUS-3
+###############################################################
+
+SEVERITY: CRITICAL
+CONFIDENCE: high
+FILE: src/storage/sqlite/connection.ts:43
+ID: connection.ts:43:is-stale-undefined-identity
+ISSUE: isStale() returns false when both current file identity and cached identity are undefined, incorrectly marking stale connections as valid.
+ATTACK VECTOR: If a connection's identity was never stored (e.g., TOCTOU during open) and its file is deleted, openIndexDb() returns the stale connection pointing to a deleted inode, causing data loss and un-freed disk space.
+SUGGESTED FIX: Treat missing cached identity as stale: modify isStale to return true if identities.get(dbPath) is undefined for non-:memory: paths. Example: `return dbPath !== ":memory:" && (identities.get(dbPath) === undefined || fileIdentity(dbPath) !== identities.get(dbPath));`
+
+---
+
+SEVERITY: CRITICAL
+CONFIDENCE: high
+FILE: src/storage/sqlite/connection.ts:109
+ID: connection.ts:109:sweep-trigger-indefinite-delay
+ISSUE: Stale connection sweep only runs once (at first openIndexDb() call) in production systems that call openIndexDb() more frequently than STALE_SWEEP_INTERVAL_MS.
+ATTACK VECTOR: Sweep resets lastSweep every time it runs. If openIndexDb() is called even once every 59s (for 60s interval), the interval is never crossed again. Stale connections that are not re-opened hold deleted inodes forever, causing disk exhaustion.
+SUGGESTED FIX: Decouple sweep trigger from lastSweep reset: track the earliest time a sweep is due, and run if current time >= due time, then set due time to now + STALE_SWEEP_INTERVAL_MS.
+
+---
+
+SEVERITY: CRITICAL
+CONFIDENCE: high
+FILE: src/storage/sqlite/connection.ts:35
+ID: connection.ts:35:stat-path-inode-reuse
+ISSUE: Stale detection relies on path-based stat() dev:ino, which is not unique across time (inodes are reused after file deletion on Unix).
+ATTACK VECTOR: A new file created at the same path as a deleted cached connection's file can receive the same dev:ino, causing isStale() to return false and openIndexDb() to return the stale connection pointing to the deleted inode, leading to silent data corruption.
+SUGGESTED FIX: Get dev:ino from the open database's file descriptor (via fstat() on the SQLite handle's fd) instead of stat() on the path, ensuring identity matches the actual inode the handle points to.
+
+---
+
+SEVERITY: HIGH
+CONFIDENCE: high
+FILE: src/storage/sqlite/connection.ts:244
+ID: connection.ts:244:open-identity-toctou
+ISSUE: openUncachedIndexDb() gets file identity via stat() on the path *after* opening the database, creating a TOCTOU race where the path can be deleted/replaced between open and stat.
+ATTACK VECTOR: If the path is deleted between opening the db and statting it, fileIdentity() returns undefined, so no identity is stored, leading to the undefined identity bug where stale connections are returned.
+SUGGESTED FIX: Use fstat() on the open database's file descriptor instead of stat() on the path to eliminate the race and ensure identity belongs to the open handle.
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: high
+FILE: src/storage/sqlite/connection.ts:54
+ID: connection.ts:54:close-stale-comment-mismatch
+ISSUE: Comment for closeStaleIndexDbs claims it closes "every cached connection whose file was deleted or replaced", but code does not close connections with no stored identity and deleted files (due to the isStale undefined bug).
+ATTACK VECTOR: Misleads maintainers about actual behavior, leading to incorrect debugging and design decisions.
+SUGGESTED FIX: Fix the isStale undefined identity bug to align code with the comment, or update the comment to reflect actual behavior (prefer fixing code).
+
+---
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:59
+ID: connection.ts:59:stale-sweep-no-lock
+ISSUE: closeStaleIndexDbs() runs without synchronization against concurrent openIndexDb() calls, creating a race between sweep and open operations.
+ATTACK VECTOR: Sweep can close a connection while another coroutine is in the process of returning it from cache, leading to use-after-closed-handle errors or undefined behavior.
+SUGGESTED FIX: Add synchronization (e.g., a per-path or global lock) around cache access during sweep and open operations, or mark connections as stale during sweep and defer closure until no references are held.
+
+
+###############################################################
+###   PROVIDER: ZAI
+###############################################################
+
+## Findings
+
+---
+
+**SEVERITY:** CRITICAL
+**CONFIDENCE:** medium
+**FILE:** src/storage/sqlite/connection.ts:111-120 (sweep inside openIndexDb) / closeIndexDb
+**ID:** connection.ts:111:sweep-closes-live-handle
+**ISSUE:** The stale sweep and per-open check call `closeIndexDb` on cached handles that were already handed out to previous callers, with no coordination with in-flight users of those handles.
+**ATTACK VECTOR:** Caller A calls `openIndexDb(p)`, receives handle H, and starts an async write batch (the module's own docstring says writes are long-running and "an agent edits files faster than the previous write settles" — i.e., awaits are interleaved with work on H). During A's `await`, caller B triggers `openIndexDb`; the file was deleted/replaced, so B calls `closeIndexDb(p)`, closing H out from under A mid-transaction. A's checkpoint/commit fails on a closed handle, and the ROLLBACK helper can't help because the connection itself is gone. Same hazard for the 60s sweep, which can close any path in the cache, including ones actively being used by requests that finished their `await openIndexDb` moments ago.
+**SUGGESTED FIX:** Track usage (refcount or "checked-out" set incremented when a handle is returned from `openIndexDb` and decremented when the caller releases it); skip closing in the sweep/per-open check while a connection is checked out, deferring to the next sweep.
+
+---
+
+**SEVERITY:** WARNING
+**CONFIDENCE:** high
+**FILE:** src/storage/sqlite/connection.ts:244-245
+**ID:** connection.ts:244:identity-captured-after-open
+**ISSUE:** The inode identity is captured *after* `openUncachedIndexDb` completes, so a file deleted/replaced between handle-open and `statSync` leaves a deleted-inode handle cached with a matching (new file's) identity — or with `undefined` identity, which `isStale` treats as "not stale" forever.
+**ATTACK VECTOR:** Exactly the failure mode the comment promises is prevented: cleanup deletes the file in the window between SQLite opening it and `fileIdentity()` running. If a new file appears at the path, `statSync` returns the *new* inode and it's recorded as the identity of the *old* deleted handle — the stale handle is then trusted until the real file changes again. If no new file appears, `fileIdentity` → `undefined` and `identities.get` → `undefined`, so `isStale` returns false and the deleted handle is cached for the life of the process (the original 16 GB leak, reintroduced).
+**SUGGESTED FIX:** Capture the identity *before/around* opening (stat, open, re-stat and confirm identity unchanged; retry if it changed), and treat "file missing but a connection is cached" as stale.
+
+---
+
+**SEVERITY:** WARNING
+**CONFIDENCE:** medium
+**FILE:** src/storage/sqlite/connection.ts:60-63
+**ID:** connection.ts:60:inode-reuse-false-fresh
+**ISSUE:** `dev:ino` identity can false-negative on inode reuse: a replacement file may land on the same inode, so `isStale` returns false and writes continue going through the old (possibly corrupt/leftover-WAL) handle.
+**ATTACK VECTOR:** Cleanup deletes `t.index.db`; a new worktree creates a file at the same path that reuses the freed inode (common after mass deletions on ext4). `isStale` sees identical identity and returns the cached handle for the dead file. Additionally, on filesystems where `statSync` reports `ino: 0` (some overlay/network mounts), all files share one identity, weakening detection. Silent data loss — writes land where no reader looks.
+**SUGGESTED FIX:** Also fingerprint size/mtime or the SQLite header page (or compare a randomly-written sentinel) rather than relying on `dev:ino` alone; skip identity tracking when `ino === 0`.
+
+---
+
+**SEVERITY:** INFO
+**CONFIDENCE:** low
+**FILE:** src/storage/sqlite/connection.ts:110
+**ID:** connection.ts:110:wall-clock-sweep-gate
+**ISSUE:** Sweep gating uses `Date.now()`, which is a wall clock; a backwards clock adjustment (NTP correction) can suppress sweeps for the duration of the jump.
+**ATTACK VECTOR:** Clock steps back by hours → `now - lastSweep` stays negative → no sweep until the clock catches up, leaking deleted-file handles in the meantime. Monotonic mismatch with the comment's claimed 60s cadence.
+**SUGGESTED FIX:** Use `performance.now()` / `process.hrtime.bigint()` instead of `Date.now()` for interval measurement.
+
+
+###############################################################
+###   PROVIDER: CLAUDE
+###############################################################
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:117
+ID: connection.ts:117:close-stale-handle-unlinks-replacement-wal
+ISSUE: When the file was replaced rather than deleted, `closeIndexDb` on the stale handle unlinks the `-wal` and `-shm` files that belong to the new database.
+ATTACK VECTOR: The comment says the file "can go away … a reset replaces it". Suppose a reset or index-child process creates a new `x.index.db` and starts writing, so its WAL holds uncheckpointed commits. This process still holds the old inode, and SQLite on that inode sees itself as the last connection. `db.close()` therefore checkpoints and then deletes `x.index.db-wal` and `x.index.db-shm` BY NAME. Those are now the new database's files. The other process keeps its open descriptors, but any later connection sees no WAL, so committed-but-uncheckpointed transactions are lost or the index is inconsistent. The sweep makes this more likely, because it closes handles on a timer rather than only when this process next opens that path.
+SUGGESTED FIX: Treat "path missing (ENOENT)" and "path now has a different inode" separately. For a replaced file, drop the handle without letting SQLite delete the WAL by name. For example, skip the checkpoint and accept that the descriptor leaks, or rename or hard-link the new `-wal` and `-shm` out of the way first. Add a test for the replaced-inode case, because the current tests cover only deletion.
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:301
+ID: connection.ts:301:stale-close-checkpoints-into-deleted-file
+ISSUE: Closing a stale handle still runs the unconditional `wal_checkpoint(TRUNCATE)`, which copies the whole WAL into a file nobody will read and fsyncs it.
+ATTACK VECTOR: The incident that motivated this change involved hundreds of deleted index files and WALs measured in GB. `closeStaleIndexDbs` runs synchronously inside `openIndexDb`, on the daemon's single event-loop thread. The first sweep after a cleanup can therefore checkpoint hundreds of multi-GB WALs into unlinked inodes, one after another. That blocks `/health` and every tool call for seconds to minutes. The work is also wasted, since the inode is deleted. The stall also occurs when disk I/O is saturated, which the CLAUDE.md notes describe.
+SUGGESTED FIX: Give `closeIndexDb` a `{ stale: true }` path that skips the checkpoint and calls `db.close()` only. Alternatively, have the sweep close at most N handles per call.
+
+SEVERITY: WARNING
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:117
+ID: connection.ts:117:close-handle-in-use-by-async-callers
+ISSUE: A stale handle is closed even while other async callers hold it, for example a paged read that yields to the event loop or a queued mutation.
+ATTACK VECTOR: `openIndexDb` hands the shared cached handle to every request. If the sweep, or any `openIndexDb` call for that path, closes a stale handle while another request is mid-await (`readTablePaged` yields between pages, `enqueueIndexMutation` is batching), that request's next statement throws "database is not open". Any open transaction is silently rolled back by `close()`. The failure surfaces as an unrelated tool error far from the cause. Previously the stale handle kept working, so this is a new failure mode, and `wrapTool` reports it as a generic error.
+SUGGESTED FIX: Have `fileIdentity` report the failure mode, and only close when no operation is in flight. For example, track a per-path in-flight counter, or defer the close to the end of `enqueueIndexMutation`. Alternatively, catch "not open" in the accessors and retry once via `openIndexDb`.
+
+SEVERITY: INFO
+CONFIDENCE: medium
+FILE: src/storage/sqlite/connection.ts:44
+ID: connection.ts:44:sweep-only-runs-on-open-comment
+ISSUE: The comment says an index nobody opens again "is only ever reached here". The sweep runs only when some `openIndexDb` call happens at least 60 s after the last one, and there is no timer.
+ATTACK VECTOR: An idle daemon, or a session that stops touching indexes after a cleanup, keeps all the deleted inodes and their disk space until the next open of any index. This is the exact leak being fixed, so the claim of coverage is overstated. On a busy daemon, 100% of the work lands in the request path (see the checkpoint finding). Every `openIndexDb` call now also does a synchronous `statSync`, and the sweep does one per cached connection, which can be hundreds.
+SUGGESTED FIX: Run `closeStaleIndexDbs` from an unref'd `setInterval` that the daemon schedules (as `scheduleAutoPrune` does), or reword the comment. Keep the per-open check but make it cheap.
+
+SEVERITY: INFO
+CONFIDENCE: low
+FILE: src/storage/sqlite/connection.ts:244
+ID: connection.ts:244:identity-captured-after-open
+ISSUE: The file identity is recorded after the connection is opened and cached, instead of from the file the handle actually opened.
+ATTACK VECTOR: If the file is replaced between `new Ctor(dbPath)` and `fileIdentity(dbPath)`, which has awaits and PRAGMAs in between, the recorded inode is the new file's while the handle is on the old one. That handle is then never detected as stale and leaks the deleted inode again. If the `statSync` fails in that window, no identity is stored. Later `isStale` sees `undefined !== "dev:ino"`, so the handle is closed and reopened on the next call.
+SUGGESTED FIX: Stat the path before `new Ctor` and again after it. If the two differ, retry the open. Otherwise store the identity.
+
+===============================================================
+END OF CROSS-PROVIDER REVIEW
+===============================================================
