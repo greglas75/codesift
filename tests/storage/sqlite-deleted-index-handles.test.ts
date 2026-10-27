@@ -55,4 +55,18 @@ describe("cached index connections let go of deleted files", () => {
     expect(keptDb.isOpen).toBe(true);
     closeIndexDb(kept);
   });
+
+  it("leaves a deleted index alone while a transaction is open on it", async () => {
+    // bug caught: closing under saveIndexSqlite, which awaits inside BEGIN, failed that write halfway
+    dir = mkdtempSync(join(tmpdir(), "codesift-deleted-"));
+    const dbPath = join(dir, "busy.index.db");
+    const db = await openIndexDb(dbPath);
+    db.exec("BEGIN");
+    removeIndex(dbPath);
+
+    expect(closeStaleIndexDbs()).toBe(0);
+    expect(db.isOpen).toBe(true);
+    db.exec("ROLLBACK");
+    closeIndexDb(dbPath);
+  });
 });

@@ -39,8 +39,22 @@ function fileIdentity(dbPath: string): string | undefined {
   }
 }
 
+/**
+ * A missing file is stale too: an identity that was never recorded (the path vanished between the
+ * open and its stat) would otherwise compare equal to the missing file and keep the handle forever.
+ */
 function isStale(dbPath: string): boolean {
-  return dbPath !== ":memory:" && fileIdentity(dbPath) !== identities.get(dbPath);
+  if (dbPath === ":memory:") return false;
+  const current = fileIdentity(dbPath);
+  return current === undefined || current !== identities.get(dbPath);
+}
+
+/**
+ * Only a handle with no open transaction is closed: `saveIndexSqlite` awaits inside one, and closing
+ * under it would fail that write halfway. Such a handle is left to the next sweep.
+ */
+function closableStale(dbPath: string): boolean {
+  return isStale(dbPath) && connections.get(dbPath)?.isTransaction !== true;
 }
 
 /** How often an open sweeps the WHOLE cache — an index nobody opens again is only ever reached here. */
@@ -51,7 +65,7 @@ let lastSweep = 0;
 export function closeStaleIndexDbs(): number {
   let closed = 0;
   for (const path of [...connections.keys()]) {
-    if (isStale(path)) {
+    if (closableStale(path)) {
       closeIndexDb(path);
       closed++;
     }
@@ -113,7 +127,7 @@ export async function openIndexDb(dbPath: string): Promise<DatabaseSyncType> {
   }
   const cached = connections.get(dbPath);
   if (cached) {
-    if (!isStale(dbPath)) return cached;
+    if (!closableStale(dbPath)) return cached;
     closeIndexDb(dbPath);
   }
 
