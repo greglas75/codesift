@@ -6,7 +6,7 @@ const MIN_CLONE_LINES = 10;
 const MAX_CLONES = 50;
 const DEFAULT_MIN_SIMILARITY = 0.7;
 /** Max line-count ratio for near-match comparison (30% tolerance) */
-const MAX_LINE_RATIO = 1.3;
+export const MAX_LINE_RATIO = 1.3;
 
 export interface CodeClone {
   symbol_a: { name: string; kind: SymbolKind; file: string; start_line: number; end_line: number };
@@ -31,7 +31,7 @@ interface CloneEntry {
   hash: number;
 }
 
-const ANALYZABLE_KINDS = new Set<SymbolKind>([
+export const ANALYZABLE_KINDS = new Set<SymbolKind>([
   "function", "method", "class", "component", "hook",
 ]);
 
@@ -39,7 +39,7 @@ const ANALYZABLE_KINDS = new Set<SymbolKind>([
  * Normalize source for comparison: strip whitespace, comments, string literals.
  * Returns array of normalized non-empty lines.
  */
-function normalizeSource(source: string): string[] {
+export function normalizeSource(source: string): string[] {
   return source
     .split("\n")
     .map((line) => {
@@ -58,7 +58,7 @@ function normalizeSource(source: string): string[] {
  * Simple fingerprint: hash of normalized lines joined.
  * Uses djb2 for speed (not crypto).
  */
-function hashLines(lines: string[]): number {
+export function hashLines(lines: string[]): number {
   let hash = 5381;
   for (const line of lines) {
     for (let i = 0; i < line.length; i++) {
@@ -72,7 +72,7 @@ function hashLines(lines: string[]): number {
  * Compute line-level similarity between two normalized sources.
  * Uses set intersection of lines (bag-of-lines similarity).
  */
-function computeSimilarity(linesA: string[], linesB: string[]): { similarity: number; sharedLines: number } {
+export function computeSimilarity(linesA: string[], linesB: string[]): { similarity: number; sharedLines: number } {
   const setA = new Set(linesA);
   const setB = new Set(linesB);
   let shared = 0;

@@ -92,6 +92,10 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
   "communities": handleCommunities,
   "patterns": handlePatterns,
   "find-clones": handleFindClones,
+  "dup-check": async (args: string[], flags: Flags) => {
+    const { handleDupCheck } = await import("./commands-dup-check.js");
+    await handleDupCheck(args, flags);
+  },
   "setup": handleSetup,
   "telemetry": async (args: string[], _flags: Flags) => {
     const { handleTelemetry } = await import("./telemetry-commands.js");

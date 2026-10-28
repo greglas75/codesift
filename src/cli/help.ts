@@ -47,6 +47,7 @@ Commands:
   communities <repo>              Detect code clusters via community detection
   patterns <repo> --pattern <name>  Search for structural code patterns
   find-clones <repo>              Find copy-paste code clones
+  dup-check [--base <ref>]        Gate: is code added on this branch a copy of existing code?
 
   setup <platform>                Configure codesift-mcp in an AI coding tool
                                   Platforms: codex, claude, cursor, gemini, all
@@ -481,6 +482,31 @@ Options:
   --threshold        Minimum similarity threshold 0-1 (default: 0.7)
   --min-lines        Minimum normalized lines to consider (default: 10)
   --include-tests    Include test files (default: false)`,
+
+  "dup-check": `codesift dup-check [--base <ref>] [--repo <name>] [--threshold 0.85] [--min-lines 8] [--json] [--strict]
+
+Duplicated-code gate for pre-push hooks and reviews. Run inside a git checkout (main or linked
+worktree). Only code ADDED since \`git merge-base <base> HEAD\` is checked — committed, staged,
+unstaged and untracked (non-ignored) files — so clones already in the repo are grandfathered.
+
+Each function/method/class/component/hook whose lines intersect the added lines is compared with
+the repo's index (find-clones normalisation): an exact copy, or a near copy with similarity
+>= threshold and >= min-lines shared lines. Test files are skipped; a symbol's own previous version
+(same file and name) is never a match.
+
+Options:
+  --base        Base ref (default: origin/HEAD's target, then origin/main, then main)
+  --repo        Index to compare against (default: this checkout's entry, else the main checkout's)
+  --threshold   Minimum similarity 0-1 (default: 0.85)
+  --min-lines   Minimum shared normalised lines (default: 8)
+  --json        Structured result on stdout
+  --strict      Exit 2 when the repo is not indexed (default: warn and exit 0)
+
+Suppress an intentional copy with a comment within 3 lines above the symbol or inside it:
+  // codesift-dup-ok: <reason>          (a marker without a reason does not count)
+
+Exit codes: 0 clean, 1 duplicates found, 2 could not run (not a git repo, bad base ref, bad flag,
+or not indexed with --strict).`,
 
   "precheck-read": `codesift precheck-read
 

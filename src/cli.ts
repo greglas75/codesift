@@ -135,8 +135,12 @@ main()
     // The unref'd timer is a backstop for any handle we still fail to close; it
     // cannot keep the process alive by itself, so it only fires if something
     // else already is.
-    process.exitCode = 0;
-    setTimeout(() => process.exit(0), 10_000).unref();
+    //
+    // A handler that set its own exit code (dup-check's 1/2, wiki-lint's 1) keeps it: this used to
+    // overwrite every code with 0, so a gate could never fail a hook.
+    const code = typeof process.exitCode === "number" ? process.exitCode : 0;
+    process.exitCode = code;
+    setTimeout(() => process.exit(code), 10_000).unref();
   })
   .catch((err: unknown) => {
   const message = err instanceof Error ? err.message : String(err);
