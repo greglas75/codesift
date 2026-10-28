@@ -40,15 +40,30 @@ export function mainCheckoutRoot(topLevel: string): string | null {
   return main === topLevel ? null : main;
 }
 
-/** `origin/HEAD`'s target (e.g. `origin/develop`), then `origin/main`, then `main`. */
+/** Base candidates in tie-break order: the remote's default first, then the usual integration branches. */
+const BASE_CANDIDATES = ["origin/develop", "origin/main", "origin/master", "develop", "main", "master"];
+
+/**
+ * The integration branch this checkout forked from: of `origin/HEAD`'s target and the usual
+ * integration branches, the one whose merge base is fewest commits behind HEAD. `origin/HEAD` alone
+ * is wrong in a develop-flow repo: rdesigner's points at `origin/main`, 4,233 commits behind develop,
+ * which turned a feature branch's diff into ~3.6M lines.
+ */
 export function defaultBaseRef(topLevel: string): string {
   const head = gitOrNull(topLevel, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]);
-  if (head?.startsWith("refs/remotes/")) return head.slice("refs/remotes/".length);
-  for (const ref of ["origin/main", "main"]) {
-    if (gitOrNull(topLevel, ["rev-parse", "--verify", "-q", `${ref}^{commit}`])) return ref;
+  const remoteDefault = head?.startsWith("refs/remotes/") ? [head.slice("refs/remotes/".length)] : [];
+  let best: { ref: string; behind: number } | null = null;
+  for (const ref of new Set([...remoteDefault, ...BASE_CANDIDATES])) {
+    if (!gitOrNull(topLevel, ["rev-parse", "--verify", "-q", `${ref}^{commit}`])) continue;
+    const mb = gitOrNull(topLevel, ["merge-base", ref, "HEAD"]);
+    const count = mb ? gitOrNull(topLevel, ["rev-list", "--count", `${mb}..HEAD`]) : null;
+    if (count === null) continue;
+    const behind = Number(count);
+    if (!best || behind < best.behind) best = { ref, behind };
   }
+  if (best) return best.ref;
   throw new DupCheckUsageError(
-    "no default base: origin/HEAD, origin/main and main are all missing — pass --base <ref>",
+    `no default base: none of origin/HEAD, ${BASE_CANDIDATES.join(", ")} shares history with HEAD — pass --base <ref>`,
   );
 }
 

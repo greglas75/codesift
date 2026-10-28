@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
-import { intersectsAddedLines, parseAddedLines, type LineRange } from "../../src/tools/dup-check-git.js";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+import {
+  defaultBaseRef,
+  intersectsAddedLines,
+  parseAddedLines,
+  type LineRange,
+} from "../../src/tools/dup-check-git.js";
 
 function diffOf(...lines: string[]): string {
   return lines.join("\n") + "\n";
@@ -115,5 +124,49 @@ describe("intersectsAddedLines", () => {
     { name: "symbol after every range", start: 31, end: 40, expected: false },
   ])("$name", ({ start, end, expected }) => {
     expect(intersectsAddedLines(start, end, ranges)).toBe(expected);
+  });
+});
+
+describe("defaultBaseRef", () => {
+  const repos: string[] = [];
+  afterAll(() => {
+    for (const r of repos) rmSync(r, { recursive: true, force: true });
+  });
+  const git = (cwd: string, ...args: string[]): void => {
+    execFileSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], { cwd, stdio: "ignore" });
+  };
+  const commit = (cwd: string, n: number): void => {
+    writeFileSync(join(cwd, "f.txt"), String(n));
+    git(cwd, "add", "-A");
+    git(cwd, "commit", "-q", "-m", `c${n}`);
+  };
+
+  it("picks the branch the work forked from, not a stale origin/HEAD", () => {
+    // Bug caught: origin/HEAD → origin/main (far behind develop) made a feature branch's diff the
+    // whole of develop's history since main — 3.6M lines on rdesigner.
+    const repo = mkdtempSync(join(tmpdir(), "dup-check-base-"));
+    repos.push(repo);
+    git(repo, "init", "-q", "-b", "main");
+    commit(repo, 1);
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    for (let n = 2; n <= 5; n++) commit(repo, n);
+    git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD");
+    git(repo, "checkout", "-q", "-b", "feature");
+    commit(repo, 6);
+    expect(defaultBaseRef(repo)).toBe("origin/develop");
+  });
+
+  it("keeps origin/HEAD's target when it is as close as any other", () => {
+    const repo = mkdtempSync(join(tmpdir(), "dup-check-base-"));
+    repos.push(repo);
+    git(repo, "init", "-q", "-b", "trunk");
+    commit(repo, 1);
+    git(repo, "update-ref", "refs/remotes/origin/trunk", "HEAD");
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD");
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk");
+    git(repo, "checkout", "-q", "-b", "feature");
+    commit(repo, 2);
+    expect(defaultBaseRef(repo)).toBe("origin/trunk");
   });
 });
