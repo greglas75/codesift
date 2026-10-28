@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [0.26.3] — 2026-10-28
+
+Two checks against duplicated code, for every agent in every indexed repo.
+
+### Added
+
+- **`codesift dup-check`** compares every function a branch adds or changes (committed, staged,
+  unstaged and untracked, against the merge base) with the repo's index and reports copies of existing
+  code. Exit 1 on findings; no index exits 0 (`--strict`: 2). Unchanged code is never reported, so old
+  clones need no baseline. An intentional copy carries `// codesift-dup-ok: <reason>` within three lines
+  above it. The default base is the nearest remote integration branch (`origin/develop` before a stale
+  `origin/HEAD`). 6.6–8.8 s on a 16k-file monorepo. `zuvo:review` and `zuvo:build` run it.
+- **`codesift precheck-write`** (PreToolUse Write hook, installed by `codesift setup claude --hooks`):
+  a NEW production source file in an indexed repo is refused until the agent has looked something up
+  since the last prompt — any CodeSift discovery tool, Grep/Glob, grep/rg in Bash or an Explore agent
+  counts. A subagent is judged by its own transcript. Edits, tests, `.d.ts` and generated output are
+  never gated; an unreadable transcript allows. `CODESIFT_SEARCH_FIRST=0` turns it off.
+
+### Changed
+
+- **A command's own exit code survives.** The CLI used to exit 0 after every command, so no gate could
+  fail a hook; `wiki-lint`, `journal-lint` and `telemetry` now also exit 1 when they report problems.
+
 ## [0.26.2] — 2026-10-23
 
 ### Fixed
