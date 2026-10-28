@@ -5,6 +5,8 @@ export {
   handlePrecheckGrep,
 } from "./hooks/pre-tool-use.js";
 
+export { handlePrecheckWrite } from "./hooks/search-first.js";
+
 export { handlePostindexFile } from "./hooks/post-tool-use.js";
 export { handlePrecompactSnapshot } from "./hooks/pre-compact.js";
 
