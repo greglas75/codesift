@@ -86,8 +86,10 @@ function entrySearched(entry: TranscriptEntry): boolean {
  */
 export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>): boolean | null {
   for (const line of linesNewestFirst) {
-    // Cheap filter first: most lines are attachments, api records and huge tool results.
+    // Cheap filters first: most lines are attachments, api records and huge tool results. A tool result
+    // is neither a lookup nor a prompt; the unescaped marker cannot occur inside prompt text (JSON escapes it).
     if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+    if (line.includes('"type":"tool_result"')) continue;
     let entry: TranscriptEntry;
     try {
       entry = JSON.parse(line) as TranscriptEntry;
@@ -111,7 +113,8 @@ export function* readLinesBackward(path: string, maxBytes = MAX_SCAN_BYTES, chun
       const size = Math.min(chunkBytes, position - floor);
       position -= size;
       const chunk = Buffer.alloc(size);
-      readSync(fd, chunk, 0, size, position);
+      // A short read would leave zero bytes in the chunk: give up (the caller fails open).
+      if (readSync(fd, chunk, 0, size, position) !== size) return;
       const data = Buffer.concat([chunk, carry]);
       // Split on bytes, not on a decoded string: a chunk boundary may fall inside a multi-byte character.
       let end = data.length;
@@ -141,7 +144,7 @@ export function transcriptFor(transcriptPath: string, agentId: string | null): s
 export function isGatedNewFile(filePath: string): boolean {
   if (!CODE_EXTENSIONS.has(extname(filePath).toLowerCase())) return false;
   if (filePath.endsWith(".d.ts") || isTestFileStrict(filePath)) return false;
-  if (/(^|\/)(node_modules|dist|build|coverage|\.next|vendor)\//.test(filePath)) return false;
+  if (/(^|[\\/])(node_modules|dist|build|coverage|\.next|vendor)[\\/]/.test(filePath)) return false;
   return !existsSync(filePath);
 }
 

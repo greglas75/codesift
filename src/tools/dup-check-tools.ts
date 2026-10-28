@@ -41,7 +41,8 @@ const SUPPRESSION_LOOKBACK = 3;
 // Suppression marker
 // ---------------------------------------------------------------------------
 
-const MARKER_RE = /codesift-dup-ok:(.*)$/;
+// `[^\r\n]` and no `$`: a CRLF line keeps its `\r`, which `.` does not match.
+const MARKER_RE = /codesift-dup-ok:([^\r\n]*)/;
 
 /**
  * The reason given by a `codesift-dup-ok: <reason>` marker within three lines above the symbol or

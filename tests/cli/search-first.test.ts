@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 import {
   handlePrecheckWrite,
+  isGatedNewFile,
   isHumanPrompt,
   isSearchToolUse,
   readLinesBackward,
@@ -46,6 +47,17 @@ describe("isSearchToolUse", () => {
     ["Read", { file_path: "a.ts" }, false],
   ])("%s %j → %s", (name, input, expected) => {
     expect(isSearchToolUse(name, input)).toBe(expected);
+  });
+});
+
+describe("isGatedNewFile", () => {
+  it.each([
+    ["a new POSIX source file", "/nonexistent-repo/src/a.ts", true],
+    // Bug caught: the exclusion only knew `/`, so Windows paths into node_modules were gated.
+    ["a Windows node_modules path", "C:\\nonexistent-repo\\node_modules\\pkg\\a.ts", false],
+    ["a Windows dist path", "C:\\nonexistent-repo\\dist\\a.js", false],
+  ])("%s → %s", (_label, path, expected) => {
+    expect(isGatedNewFile(path)).toBe(expected);
   });
 });
 
@@ -162,6 +174,7 @@ describe("handlePrecheckWrite", () => {
   it("suggests grep instead of CodeSift tools the caller does not have", async () => {
     hookEnv.serverRunning = false;
     await run(join(repo, "src", "format-percent.ts"), transcript(prompt("add a percent formatter")));
+    expect(denied()).toBe(true);
     expect(stdout).toContain("grep -rn");
     expect(stdout).not.toContain("semantic_search");
   });

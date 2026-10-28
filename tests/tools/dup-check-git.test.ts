@@ -157,6 +157,20 @@ describe("defaultBaseRef", () => {
     expect(defaultBaseRef(repo)).toBe("origin/develop");
   });
 
+  it("ignores a local branch that already contains HEAD", () => {
+    // Bug caught: local develop fast-forwarded past the feature commit had its merge base AT HEAD,
+    // won with 0 commits behind, and turned the check into an empty diff.
+    const repo = mkdtempSync(join(tmpdir(), "dup-check-base-"));
+    repos.push(repo);
+    git(repo, "init", "-q", "-b", "develop");
+    commit(repo, 1);
+    git(repo, "update-ref", "refs/remotes/origin/develop", "HEAD");
+    git(repo, "checkout", "-q", "-b", "feature");
+    commit(repo, 2);
+    git(repo, "update-ref", "refs/heads/develop", "HEAD");
+    expect(defaultBaseRef(repo)).toBe("origin/develop");
+  });
+
   it("keeps origin/HEAD's target when it is as close as any other", () => {
     const repo = mkdtempSync(join(tmpdir(), "dup-check-base-"));
     repos.push(repo);

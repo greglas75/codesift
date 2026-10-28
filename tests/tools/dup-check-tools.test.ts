@@ -87,6 +87,11 @@ describe("suppressionReason", () => {
     expect(suppressionReason(file, start, end)).toBe(expected);
   });
 
+  it("reads a marker on a CRLF line", () => {
+    // Bug caught: `(.*)$` cannot cross the trailing `\r`, so every marker in a CRLF file was ignored.
+    expect(suppressionReason(["// codesift-dup-ok: adapter copy\r", "function x() {\r", "}\r"], 2, 3)).toBe("adapter copy");
+  });
+
   it("a marker without a reason does not suppress", () => {
     // Bug caught: `codesift-dup-ok:` with nothing after it exempted the copy it should question.
     expect(suppressionReason(["// codesift-dup-ok:", "function x() {", "}"], 2, 3)).toBeNull();

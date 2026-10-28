@@ -40,8 +40,9 @@ export function mainCheckoutRoot(topLevel: string): string | null {
   return main === topLevel ? null : main;
 }
 
-/** Base candidates in tie-break order: the remote's default first, then the usual integration branches. */
-const BASE_CANDIDATES = ["origin/develop", "origin/main", "origin/master", "develop", "main", "master"];
+/** Remote integration branches; the local ones are used only when no remote one resolves. */
+const REMOTE_BASES = ["origin/develop", "origin/main", "origin/master"];
+const LOCAL_BASES = ["develop", "main", "master"];
 
 /**
  * The integration branch this checkout forked from: of `origin/HEAD`'s target and the usual
@@ -52,8 +53,20 @@ const BASE_CANDIDATES = ["origin/develop", "origin/main", "origin/master", "deve
 export function defaultBaseRef(topLevel: string): string {
   const head = gitOrNull(topLevel, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"]);
   const remoteDefault = head?.startsWith("refs/remotes/") ? [head.slice("refs/remotes/".length)] : [];
+  // A local branch that already contains HEAD (fast-forwarded, or merged into) has its merge base AT
+  // HEAD and would win with an empty diff, so local refs only stand in for a checkout with no remote.
+  return nearestBase(topLevel, [...remoteDefault, ...REMOTE_BASES]) ?? nearestBase(topLevel, LOCAL_BASES) ?? noBase();
+}
+
+function noBase(): never {
+  throw new DupCheckUsageError(
+    `no default base: none of origin/HEAD, ${[...REMOTE_BASES, ...LOCAL_BASES].join(", ")} shares history with HEAD — pass --base <ref>`,
+  );
+}
+
+function nearestBase(topLevel: string, candidates: readonly string[]): string | null {
   let best: { ref: string; behind: number } | null = null;
-  for (const ref of new Set([...remoteDefault, ...BASE_CANDIDATES])) {
+  for (const ref of new Set(candidates)) {
     if (!gitOrNull(topLevel, ["rev-parse", "--verify", "-q", `${ref}^{commit}`])) continue;
     const mb = gitOrNull(topLevel, ["merge-base", ref, "HEAD"]);
     const count = mb ? gitOrNull(topLevel, ["rev-list", "--count", `${mb}..HEAD`]) : null;
@@ -61,10 +74,7 @@ export function defaultBaseRef(topLevel: string): string {
     const behind = Number(count);
     if (!best || behind < best.behind) best = { ref, behind };
   }
-  if (best) return best.ref;
-  throw new DupCheckUsageError(
-    `no default base: none of origin/HEAD, ${BASE_CANDIDATES.join(", ")} shares history with HEAD — pass --base <ref>`,
-  );
+  return best?.ref ?? null;
 }
 
 export function mergeBaseWith(topLevel: string, base: string): string {

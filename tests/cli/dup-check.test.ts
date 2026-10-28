@@ -2,7 +2,7 @@
  * `codesift dup-check` end to end on a throwaway git repository with a real index: the exit codes
  * are what pre-push hooks act on, so each case asserts the code and the line a human would read.
  */
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -59,7 +59,20 @@ async function makeRepo(index = true): Promise<string> {
   return repo;
 }
 
+// Index into a throwaway data dir: the default (~/.codesift) would register every temp repo in the
+// developer's real registry.
+const savedDataDir = process.env["CODESIFT_DATA_DIR"];
+beforeAll(async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), "codesift-dup-check-data-"));
+  dirs.push(dataDir);
+  process.env["CODESIFT_DATA_DIR"] = dataDir;
+  resetConfigCache();
+});
+
 afterAll(async () => {
+  if (savedDataDir === undefined) delete process.env["CODESIFT_DATA_DIR"];
+  else process.env["CODESIFT_DATA_DIR"] = savedDataDir;
+  resetConfigCache();
   for (const d of dirs) await rm(d, { recursive: true, force: true });
 });
 
