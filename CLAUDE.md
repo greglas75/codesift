@@ -158,6 +158,18 @@ in `detectAutoLoadTools` at `src/register-tools.ts`.
 ### search_text ranked mode (NEW)
 `search_text(repo, query, ranked=true)` classifies each hit by its containing function, deduplicates (max 2 per function), and ranks by symbol centrality. Returns `TextMatch` with `containing_symbol` field. Saves 1-3 follow-up get_symbol calls. Takes precedence over `auto_group`.
 
+### `codesift dup-check` — duplicated-code gate for new code (2026-10-28)
+
+CLI-only (`src/cli/commands-dup-check.ts`, `src/tools/dup-check-tools.ts`, `dup-check-git.ts`), for
+pre-push hooks and review skills. Checks only symbols touching lines ADDED since
+`git merge-base <base> HEAD` (working tree, so uncommitted and untracked files count), so existing
+clones need no baseline. Reuses `find_clones`' normalisation/hash/similarity (exported from
+`clone-tools.ts`; keep them shared — two definitions of "clone" would disagree). Touched files are
+re-parsed with `parseOneFile` and REPLACE their index copy in the comparison pool, which is what keeps
+an edited or moved function from matching its own previous version. Exit 0 clean / 1 findings / 2
+cannot run; unindexed warns + 0 (`--strict` → 2). `cli.ts` now keeps a handler's `process.exitCode`
+(it used to force 0). Measured on rdesigner (450k symbols): 6.7–8.8 s wall, ~0.3–0.4 GB RSS.
+
 ### Indexing honours .gitignore (2026-10-11)
 
 The walker knew only `IGNORE_DIRS`, never `.gitignore`. On rdesigner **1,147,279 of 1,429,034 symbols

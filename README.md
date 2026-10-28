@@ -190,6 +190,7 @@ codesift wiki-generate
 | `codesift dead-code <repo>` | Find exported symbols with zero external references |
 | `codesift complexity <repo>` | Cyclomatic complexity + nesting depth per function |
 | `codesift clones <repo>` | Copy-paste detection (hash bucketing + line similarity) |
+| `codesift dup-check [--base <ref>]` | Gate for new code: is anything added since `merge-base <base> HEAD` (incl. uncommitted and untracked files) a copy of existing code? Exit 1 on findings — for pre-push hooks and reviews. Suppress with `// codesift-dup-ok: <reason>` |
 | `codesift hotspots <repo>` | Git churn x complexity = risk-ranked file list |
 | `codesift patterns <repo> <pattern>` | Structural anti-pattern search (33 built-in + custom regex) |
 
