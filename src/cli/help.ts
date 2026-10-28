@@ -55,6 +55,7 @@ Commands:
   precheck-bash                   PreToolUse hook: redirect find/grep to CodeSift (hook handler)
   precheck-glob                   PreToolUse hook: redirect Glob to CodeSift (hook handler)
   precheck-grep                   PreToolUse hook: redirect Grep to CodeSift (hook handler)
+  precheck-write                  PreToolUse hook: look up existing code before creating a new source file (hook handler)
   postindex-file                  PostToolUse hook: re-index edited files (hook handler)
 
 Flags:
@@ -534,6 +535,20 @@ raw shell commands. Installed as a Claude Code PreToolUse hook via:
 
 Env vars:
   HOOK_TOOL_INPUT    JSON with tool_input.command (set by Claude Code)`,
+
+  "precheck-write": `codesift precheck-write
+
+PreToolUse hook handler for the Write tool — the search-first gate.
+Denies creating a NEW production source file inside an indexed repo until the
+agent has looked up existing code since the last human prompt (or since its
+brief, in a subagent). Any repo search counts: CodeSift discovery tools
+(search_symbols, semantic_search, find_clones, ...), Grep/Glob, grep/rg in Bash,
+an Explore agent. Edits, tests, .d.ts and generated paths are never gated.
+Fails open when the transcript cannot be read. Installed via:
+  codesift setup claude --hooks
+
+Env vars:
+  CODESIFT_SEARCH_FIRST=0   turn the gate off`,
 
   "postindex-file": `codesift postindex-file
 

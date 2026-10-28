@@ -15,7 +15,7 @@ const CLAUDE_CONFIG = { configDirName: "", configFileName: ".claude.json" };
 
 const STDIN_HOOK_SUBCOMMANDS = [
   "session-start", "session-gate", "precheck-read", "precheck-bash", "precheck-glob",
-  "precheck-grep", "precheck-agent", "postindex-file", "sentinel-writer",
+  "precheck-grep", "precheck-agent", "precheck-write", "postindex-file", "sentinel-writer",
   "precompact-snapshot",
 ] as const;
 
@@ -26,6 +26,7 @@ const CLAUDE_HOOKS: Record<string, HookEntry[]> = {
     { matcher: "Glob", hooks: [{ type: "command", command: "codesift precheck-glob --stdin" }] },
     { matcher: "Grep", hooks: [{ type: "command", command: "codesift precheck-grep --stdin" }] },
     { matcher: "Agent", hooks: [{ type: "command", command: "codesift precheck-agent --stdin" }] },
+    { matcher: "Write", hooks: [{ type: "command", command: "codesift precheck-write --stdin" }] },
   ],
   SessionStart: [
     { matcher: "", hooks: [{ type: "command", command: "codesift session-start --stdin" }] },

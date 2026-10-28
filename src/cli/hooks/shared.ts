@@ -118,19 +118,23 @@ function indexArtifactExists(indexPath: string): boolean {
 }
 
 export function isCurrentRepoIndexed(): boolean {
+  return isPathInIndexedRepo(process.cwd());
+}
+
+/** Does `path` (a directory or a file, existing or not) lie inside a repo with an index on disk? */
+export function isPathInIndexedRepo(path: string): boolean {
   try {
     const raw = readFileSync(getRegistryPath(), "utf-8");
     const parsed = JSON.parse(raw) as { repos?: unknown };
     if (!parsed.repos || typeof parsed.repos !== "object") return false;
 
     const repos = Object.values(parsed.repos as Record<string, unknown>);
-    const cwd = process.cwd();
 
     for (const repo of repos) {
       if (!repo || typeof repo !== "object") continue;
       const meta = repo as { root?: unknown; index_path?: unknown };
       if (typeof meta.root !== "string" || typeof meta.index_path !== "string") continue;
-      if (!isCwdInsideRepo(cwd, meta.root)) continue;
+      if (!isCwdInsideRepo(path, meta.root)) continue;
       if (indexArtifactExists(meta.index_path)) return true;
     }
   } catch {

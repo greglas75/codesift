@@ -153,6 +153,10 @@ export const COMMAND_MAP: Record<string, CommandHandler> = {
     const { handlePrecheckGrep } = await import("./hooks.js");
     await handlePrecheckGrep();
   },
+  "precheck-write": async () => {
+    const { handlePrecheckWrite } = await import("./hooks.js");
+    await handlePrecheckWrite();
+  },
   "precheck-agent": async () => {
     const { handlePrecheckAgent } = await import("./hooks.js");
     await handlePrecheckAgent();
