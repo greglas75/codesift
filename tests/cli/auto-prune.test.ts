@@ -9,6 +9,26 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+// Lets one test make a slow stamp read, as on a loaded host. It delays every `fs/promises.readFile`,
+// which in this file is only auto-prune's stamp; at zero (every other test) it is the real function.
+const stampRead = vi.hoisted(() => ({ delayMs: 0 }));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs/promises")>();
+  // The delay comes AFTER the read: the race is the window between reading the stamp and writing it.
+  const readFile = (async (...args: Parameters<typeof real.readFile>) => {
+    if (stampRead.delayMs === 0) return real.readFile(...args);
+    const settled = real.readFile(...args).then(
+      (content) => ({ content }),
+      (error: unknown) => ({ error }),
+    );
+    const result = await settled;
+    await new Promise((resolve) => setTimeout(resolve, stampRead.delayMs));
+    if ("error" in result) throw result.error;
+    return result.content;
+  }) as typeof real.readFile;
+  return { ...real, readFile };
+});
+
 import {
   runAutoPruneOnce,
   pruneIsDue,
@@ -21,7 +41,10 @@ let dir: string;
 const DAY = 24 * 60 * 60 * 1000;
 
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "cs-autoprune-")); });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  stampRead.delayMs = 0;
+  rmSync(dir, { recursive: true, force: true });
+});
 
 function spy() {
   const calls: string[] = [];
@@ -109,11 +132,8 @@ describe("auto-prune", () => {
 // already-unregistered and still on disk, waiting for a pass only a restart could deliver. A manual
 // two-pass run reclaimed 35.42 GB then 4.6 GB.
 //
-// TICK is deliberately not 1 ms. `runAutoPruneOnce` reads the stamp with `await readFile` and writes
-// it after, so ticks closer together than that round trip all see the OLD stamp and all spawn — a
-// 1 ms interval made this file fail with "expected 2 to be 1". That race is unreachable in
-// production, where the interval is an hour and the throttle a day, which is why the fix is a
-// realistic interval here rather than a lock in the daemon.
+// TICK leaves the scheduler room to tick several times inside `settle()`. Overlapping ticks are
+// guarded in `scheduleAutoPrune` itself, and pinned by their own test below.
 const TICK = 40;
 const settle = (ticks = 3): Promise<unknown> =>
   new Promise((resolve) => setTimeout(resolve, TICK * ticks));
@@ -174,6 +194,30 @@ describe("auto-prune schedule", () => {
     clock += DAY * 3;
     await settle(4);
     expect(s.calls.length).toBe(1);
+  });
+
+  it("does not start a check while the previous one is still reading the stamp", async () => {
+    // Bug caught: overlapping ticks. A tick that fires before the previous check has written its
+    // stamp reads the OLD one, and both spawn. On a loaded host the stamp's round trip outlasts the
+    // interval — the full suite on the farm failed with "expected 3 to be 2" — so here the read takes
+    // 30 ms, thirty of this test's 1 ms ticks.
+    stampRead.delayMs = 30;
+    const s = spy();
+    let clock = 1_000_000_000_000;
+    const handle = scheduleAutoPrune({
+      dataDir: dir, cliEntry: "/cli.js", env: {}, now: () => clock,
+      spawnChild: s.spawnChild, delayMs: 1, checkIntervalMs: 1,
+    });
+    try {
+      await vi.waitFor(() => expect(s.calls.length).toBe(1), { timeout: 3000 });
+      await settle();
+      expect(s.calls.length).toBe(1);
+      // The guard must also let go: a lock that stayed held would read as 1 above as well.
+      clock += DAY;
+      await vi.waitFor(() => expect(s.calls.length).toBe(2), { timeout: 3000 });
+    } finally {
+      handle.stop();
+    }
   });
 
   it("names a log beside the stamp, so a sweep's outcome is a tail and not an investigation", () => {
