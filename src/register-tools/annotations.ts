@@ -13,6 +13,8 @@ import type { ToolAnnotations } from "@modelcontextprotocol/server";
  *
  * What does not count as writing: CodeSift's own bookkeeping under its data dir (usage
  * log, session state, index caches) and a linter's cache (.ruff_cache, .mypy_cache).
+ * Changing which tools a client sees DOES count: describe_tools(reveal=true) and plan_turn
+ * can put rename_symbol on the list, so neither may pass as a plain lookup.
  */
 const CLOSED_WRITE: ToolAnnotations = {
   readOnlyHint: false,
@@ -38,6 +40,7 @@ const WRITING_TOOLS: Readonly<Record<string, ToolAnnotations>> = {
   architecture_summary: REPEATABLE_WRITE,
   consolidate_memories: OVERWRITES, // MEMORY.md in the project root by default
   create_analysis_plan: CLOSED_WRITE,
+  describe_tools: REPEATABLE_WRITE, // reveal=true enables tools in tools/list
   generate_claude_md: OVERWRITES, // any file in the repo via output_path
   generate_report: REPEATABLE_WRITE,
   generate_wiki: CLOSED_WRITE, // journal_mode can append
@@ -47,6 +50,7 @@ const WRITING_TOOLS: Readonly<Record<string, ToolAnnotations>> = {
   index_repo: { ...REPEATABLE_WRITE, openWorldHint: true }, // clones a remote
   invalidate_cache: OVERWRITES,
   journal_append: CLOSED_WRITE,
+  plan_turn: REPEATABLE_WRITE, // enables the hidden tools it recommends
   pope_insights_push_candidates: { ...CLOSED_WRITE, openWorldHint: true }, // POSTs with dry_run=false
   react_quickstart: REPEATABLE_WRITE,
   rename_symbol: { ...CLOSED_WRITE, destructiveHint: true }, // rewrites source files
@@ -75,7 +79,7 @@ const LOCAL_READ_TOOLS: ReadonlySet<string> = new Set<string>([
   "astro_middleware", "astro_migration_check", "astro_route_map", "astro_sessions",
   "astro_svg_components", "audit_agent_config", "audit_compiler_readiness", "audit_hono_security",
   "audit_scan", "changed_symbols", "check_boundaries", "classify_roles", "co_change_analysis",
-  "codebase_retrieval", "cross_repo_refs", "cross_repo_search", "describe_tools",
+  "codebase_retrieval", "cross_repo_refs", "cross_repo_search",
   "detect_communities", "detect_hono_modules", "diff_migrations", "diff_outline",
   "discover_tools", "effective_django_view_security", "explain_query", "explore",
   "extract_api_contract", "extract_kotlin_serialization_contract", "extract_response_types",
@@ -92,7 +96,7 @@ const LOCAL_READ_TOOLS: ReadonlySet<string> = new Set<string>([
   "list_patterns", "list_repos", "list_workspaces", "match_group_contracts",
   "memory_candidate_extract", "migration_lint", "nest_audit", "nextjs_metadata_audit",
   "nextjs_route_map", "optimization_candidates", "parse_pyproject", "php8_compat_check",
-  "php_project_audit", "php_security_scan", "plan_turn", "python_audit", "read_memory",
+  "php_project_audit", "php_security_scan", "python_audit", "read_memory",
   "resolve_constant_value", "resolve_php_namespace", "resolve_php_service", "retros_analyze",
   "retros_list", "review_diff", "run_mypy", "run_pyright", "run_ruff", "scan_secrets",
   "scratchpad_list", "scratchpad_read", "search_all_conversations", "search_columns",
@@ -112,10 +116,11 @@ export const ANNOTATED_TOOL_NAMES: readonly string[] = [
   ...LOCAL_READ_TOOLS,
 ];
 
+/** A fresh object per call: the presets are shared, and a registered tool keeps what it is given. */
 export function toolAnnotations(name: string): ToolAnnotations | undefined {
-  if (Object.hasOwn(WRITING_TOOLS, name)) return WRITING_TOOLS[name];
+  if (Object.hasOwn(WRITING_TOOLS, name)) return { ...WRITING_TOOLS[name] };
   if (EXTERNAL_READ_TOOLS.has(name)) return { ...LOCAL_READ, openWorldHint: true };
-  return LOCAL_READ_TOOLS.has(name) ? LOCAL_READ : undefined;
+  return LOCAL_READ_TOOLS.has(name) ? { ...LOCAL_READ } : undefined;
 }
 
 /** Spread into a registerTool config: exactOptionalPropertyTypes rejects `annotations: undefined`. */
