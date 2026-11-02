@@ -5,6 +5,7 @@ import { setHintToolVisibility } from "./server-helpers/response-hints.js";
 import { detectProjectLanguagesSync, type ProjectLanguages } from "./utils/language-detect.js";
 import type { HookPlatform } from "./cli/platform.js";
 import { setRegisterToolRuntime, zBool } from "./register-tool-groups/shared.js";
+import { annotationConfig } from "./register-tools/annotations.js";
 import { detectAutoLoadToolsCached } from "./register-tools/autoload.js";
 import { describeTools, discoverTools, getToolDefinitions, isFrozenToolListHost, resolveVisibleToolNames, setFrozenToolListHost } from "./register-tools/discovery.js";
 import { enableToolByName, getRegisteredToolNames, reapplyRevealedTools, registerToolDefinition, resetToolRegistrationContext, setToolHandle } from "./register-tools/runtime.js";
@@ -150,6 +151,7 @@ export function registerTools(
     "discover_tools",
     {
       description: "Search tool catalog by keyword or category. Returns matching tools with descriptions.",
+      ...annotationConfig("discover_tools"),
       inputSchema: {
         query: z.string().describe("Keywords to search for (e.g. 'dead code', 'complexity', 'rename', 'secrets')"),
         category: z.string().optional().describe("Filter by category (e.g. 'analysis', 'lsp', 'architecture')"),
@@ -166,6 +168,7 @@ export function registerTools(
     "describe_tools",
     {
       description: "Get full schema for specific tools by name. Use after discover_tools to see params before calling. A schema already returned earlier in the same session comes back as a pointer, not a repeat — pass force=true if the context no longer holds it.",
+      ...annotationConfig("describe_tools"),
       inputSchema: {
         names: z.union([z.array(z.string()), zStringArrayJson()]).describe("Tool names to describe"),
         reveal: zBool().describe("If true, enable tools in ListTools so the LLM can call them"),
