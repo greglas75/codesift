@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Every tool now reports MCP annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+  `openWorldHint`) in `tools/list`, so a client can tell a lookup from a tool that changes something.
+  A new tool with no classification reports none and fails the test until it is listed. They are
+  hints, not a security boundary.
+
 ## [0.26.3] — 2026-10-28
 
 Two checks against duplicated code, for every agent in every indexed repo.

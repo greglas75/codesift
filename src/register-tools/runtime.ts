@@ -2,6 +2,7 @@ import { statSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { McpServer } from "@modelcontextprotocol/server";
+import { annotationConfig } from "./annotations.js";
 import { currentCwd } from "../server-helpers/request-context.js";
 import {
   wrapTool,
@@ -531,7 +532,7 @@ export function registerToolDefinition(
   // so it moves into the config object unchanged.
   const handle = server.registerTool(
     tool.name,
-    { description: tool.description, inputSchema: tool.schema },
+    { description: tool.description, inputSchema: tool.schema, ...annotationConfig(tool.name) },
     async (args): Promise<ToolResponse> => {
       const callArgs = args as Record<string, unknown>;
       // Snapshot the args BEFORE the call: wrapTool's resolveRepo MUTATES this
