@@ -156,10 +156,20 @@ export async function runAutoPruneOnce(options: AutoPruneOptions): Promise<
 export function scheduleAutoPrune(
   options: AutoPruneOptions & { delayMs?: number; checkIntervalMs?: number },
 ): { stop: () => void } {
+  // One check at a time. A tick that starts while the previous check is between reading the stamp
+  // and writing it reads the OLD stamp, and both spawn a sweep. An hour apart that needs a stamp
+  // round trip of an hour; on a loaded test host 40 ms was enough ("expected 3 to be 2").
+  let inFlight = false;
   const check = (): void => {
-    void runAutoPruneOnce(options).catch(() => {
-      // Maintenance is best-effort by construction: the next tick tries again.
-    });
+    if (inFlight) return;
+    inFlight = true;
+    void runAutoPruneOnce(options)
+      .catch(() => {
+        // Maintenance is best-effort by construction: the next tick tries again.
+      })
+      .finally(() => {
+        inFlight = false;
+      });
   };
   let interval: NodeJS.Timeout | undefined;
   const opening = setTimeout(() => {
