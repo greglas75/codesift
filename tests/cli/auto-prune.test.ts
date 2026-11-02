@@ -9,18 +9,20 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-// Lets one test make the stamp's read slow, as it is on a loaded host; zero (no delay) for the rest.
+// Lets one test make a slow stamp read, as on a loaded host. It delays every `fs/promises.readFile`,
+// which in this file is only auto-prune's stamp; at zero (every other test) it is the real function.
 const stampRead = vi.hoisted(() => ({ delayMs: 0 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:fs/promises")>();
   // The delay comes AFTER the read: the race is the window between reading the stamp and writing it.
   const readFile = (async (...args: Parameters<typeof real.readFile>) => {
+    if (stampRead.delayMs === 0) return real.readFile(...args);
     const settled = real.readFile(...args).then(
       (content) => ({ content }),
       (error: unknown) => ({ error }),
     );
     const result = await settled;
-    if (stampRead.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, stampRead.delayMs));
+    await new Promise((resolve) => setTimeout(resolve, stampRead.delayMs));
     if ("error" in result) throw result.error;
     return result.content;
   }) as typeof real.readFile;
@@ -198,17 +200,21 @@ describe("auto-prune schedule", () => {
     // Bug caught: overlapping ticks. A tick that fires before the previous check has written its
     // stamp reads the OLD one, and both spawn. On a loaded host the stamp's round trip outlasts the
     // interval — the full suite on the farm failed with "expected 3 to be 2" — so here the read takes
-    // 30 ticks.
+    // 30 ms, thirty of this test's 1 ms ticks.
     stampRead.delayMs = 30;
     const s = spy();
-    const clock = 1_000_000_000_000;
+    let clock = 1_000_000_000_000;
     const handle = scheduleAutoPrune({
       dataDir: dir, cliEntry: "/cli.js", env: {}, now: () => clock,
       spawnChild: s.spawnChild, delayMs: 1, checkIntervalMs: 1,
     });
     try {
+      await vi.waitFor(() => expect(s.calls.length).toBe(1), { timeout: 3000 });
       await settle();
       expect(s.calls.length).toBe(1);
+      // The guard must also let go: a lock that stayed held would read as 1 above as well.
+      clock += DAY;
+      await vi.waitFor(() => expect(s.calls.length).toBe(2), { timeout: 3000 });
     } finally {
       handle.stop();
     }
