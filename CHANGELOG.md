@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.26.4] — 2026-11-02
+
+Clients can now tell a lookup from a tool that changes something.
+
 ### Added
 
 - **Every tool now reports MCP annotations** (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
