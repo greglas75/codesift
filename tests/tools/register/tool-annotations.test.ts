@@ -72,10 +72,8 @@ describe("tool annotations", () => {
 
   it("sends each tool's hints through tools/list, and the table names only real tools", async () => {
     const tools = await listToolsFromRealServer();
-    const wrong = tools
-      .filter((t) => JSON.stringify(t.annotations) !== JSON.stringify(toolAnnotations(t.name)))
-      .map((t) => t.name);
-    expect(wrong).toEqual([]);
+    expect(tools.filter((t) => t.annotations === undefined).map((t) => t.name)).toEqual([]);
+    expect(tools.map((t) => [t.name, t.annotations])).toEqual(tools.map((t) => [t.name, toolAnnotations(t.name)]));
 
     const known = new Set([...TOOL_DEFINITION_MAP.keys(), ...tools.map((t) => t.name)]);
     expect(ANNOTATED_TOOL_NAMES.filter((name) => !known.has(name))).toEqual([]);
