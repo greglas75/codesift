@@ -1,12 +1,18 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { findPerfHotspots } from "../../src/tools/perf-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+
+// Hoisted with the mock factory that reads them. `sourceRead` holds the symbols the scan has read so
+// far: every symbol's `source` is a getter that records it.
+const { SYMBOLS, sourceRead } = vi.hoisted(() => ({ SYMBOLS: 20_000, sourceRead: new Set<string>() }));
+
+beforeEach(() => sourceRead.clear());
 
 // findPerfHotspots reads through the narrow accessors (ADR-004 stage 2). The helper delivers a
 // stream as ONE batch — the shape of a resident index — which is the worst case for yielding.
 vi.mock("../../src/tools/index-tools.js", async () => {
   const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
-  return narrowIndexMock(async (_repo: unknown): Promise<CodeIndex> => makeLargeIndex(20_000));
+  return narrowIndexMock(async (_repo: unknown): Promise<CodeIndex> => makeLargeIndex(SYMBOLS));
 });
 
 function makeLargeIndex(n: number): CodeIndex {
@@ -20,17 +26,22 @@ function makeLargeIndex(n: number): CodeIndex {
   ];
   for (let i = 0; i < n; i++) {
     const tmpl = sourceTemplates[i % sourceTemplates.length]!;
-    symbols.push({
-      id: `t:f${i}.ts:fn${i}:1`,
+    const id = `t:f${i}.ts:fn${i}:1`;
+    const symbol: CodeSymbol = {
+      id,
       repo: "test",
       name: `fn${i}`,
       kind: "function",
       file: `src/f${i}.ts`,
       start_line: 1,
       end_line: 5,
-      source: tmpl,
       signature: `function fn${i}()`,
+    };
+    Object.defineProperty(symbol, "source", {
+      enumerable: true,
+      get: () => { sourceRead.add(id); return tmpl; },
     });
+    symbols.push(symbol);
   }
   return {
     repo: "test",
@@ -45,51 +56,44 @@ function makeLargeIndex(n: number): CodeIndex {
 }
 
 /**
- * Measures the maximum gap between successive `setImmediate` callbacks
- * during the execution of `task`. If the event loop is blocked by a
- * synchronous loop, callbacks queue up and the gap explodes.
+ * The most symbols the scan read between two event-loop turns. A self-re-arming `setImmediate`
+ * fires once per loop turn and samples how many symbols have been read so far, so the largest step
+ * between samples is the longest stretch the scan ran without giving the loop a turn.
  *
- * Returns `{ maxGapMs, taskMs }`.
+ * It counts symbols, not milliseconds. The old version asserted the longest gap between turns was
+ * under 100 ms, which a loaded CI runner broke on its own ("expected 126 to be less than 100", run
+ * 41577995004 on a docs-only PR).
  */
-async function measureMaxEventLoopGap<T>(task: () => Promise<T>): Promise<{ maxGapMs: number; taskMs: number; result: T }> {
-  const ticks: number[] = [Date.now()];
+async function longestStretchWithoutATurn(task: () => Promise<unknown>): Promise<number> {
+  const samples: number[] = [0];
   let stop = false;
   const tick = (): void => {
-    ticks.push(Date.now());
+    samples.push(sourceRead.size);
     if (!stop) setImmediate(tick);
   };
   setImmediate(tick);
-
-  const t0 = Date.now();
-  const result = await task();
-  const taskMs = Date.now() - t0;
-  stop = true;
-  // Allow the final setImmediate to settle so we capture the post-task tick
-  await new Promise((r) => setImmediate(r));
-
-  let maxGapMs = 0;
-  for (let i = 1; i < ticks.length; i++) {
-    maxGapMs = Math.max(maxGapMs, ticks[i]! - ticks[i - 1]!);
+  try {
+    await task();
+  } finally {
+    stop = true;
   }
-  return { maxGapMs, taskMs, result };
+  samples.push(sourceRead.size);
+  let longest = 0;
+  for (let i = 1; i < samples.length; i++) longest = Math.max(longest, samples[i]! - samples[i - 1]!);
+  return longest;
 }
 
 describe("event loop yields in heavy CodeSift tools", () => {
-  it("findPerfHotspots yields at least every 100ms on a 20k-symbol index", async () => {
-    // Without yields, this loop blocks the event loop for the full duration of the scan
-    // (typically 200ms-2s+ depending on CPU). With yields every 512 iterations,
-    // max gap should stay well under 100ms — leaving room for MCP ping responses.
-    const { maxGapMs, taskMs } = await measureMaxEventLoopGap(() =>
-      findPerfHotspots("test", { max_results: 1000 }),
+  it("findPerfHotspots reads at most 512 symbols between event-loop turns on a 20k-symbol index", async () => {
+    // Bug caught: a scan that stops yielding (or yields far less often) blocks the MCP transport
+    // for the whole scan, and the client drops the connection (-32000). The scan yields every 256
+    // symbols; without the yield the whole 20 000 are read in one stretch. 512 leaves room to
+    // retune the interval. The limit is one the scan cannot reach, so it reads every symbol.
+    const longest = await longestStretchWithoutATurn(() =>
+      findPerfHotspots("test", { max_results: 1_000_000 }),
     );
 
-    // Sanity: the task did real work (not zero-cost short-circuit). On
-    // fast machines findPerfHotspots over 20k symbols can finish in ~15ms,
-    // so the floor is set generously low — the meaningful assertion is the
-    // event-loop responsiveness check below.
-    expect(taskMs).toBeGreaterThan(5);
-
-    // Core assertion: event loop was responsive throughout the scan
-    expect(maxGapMs).toBeLessThan(100);
+    expect(sourceRead.size).toBe(SYMBOLS);
+    expect(longest).toBeLessThanOrEqual(512);
   }, 30_000);
 });
