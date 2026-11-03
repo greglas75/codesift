@@ -6,8 +6,12 @@ import type { CodeIndex, CodeSymbol } from "../../src/types.js";
 // stream as ONE batch — the shape of a resident index — which is the worst case for yielding.
 vi.mock("../../src/tools/index-tools.js", async () => {
   const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
-  return narrowIndexMock(async (_repo: unknown): Promise<CodeIndex> => makeLargeIndex(20_000));
+  return narrowIndexMock(async (_repo: unknown): Promise<CodeIndex> => makeLargeIndex(SYMBOLS));
 });
+
+const SYMBOLS = 20_000;
+// Which symbols the scan has read so far: every symbol's `source` is a getter that records it.
+const sourceRead = new Set<string>();
 
 function makeLargeIndex(n: number): CodeIndex {
   const symbols: CodeSymbol[] = [];
@@ -20,17 +24,22 @@ function makeLargeIndex(n: number): CodeIndex {
   ];
   for (let i = 0; i < n; i++) {
     const tmpl = sourceTemplates[i % sourceTemplates.length]!;
-    symbols.push({
-      id: `t:f${i}.ts:fn${i}:1`,
+    const id = `t:f${i}.ts:fn${i}:1`;
+    const symbol: CodeSymbol = {
+      id,
       repo: "test",
       name: `fn${i}`,
       kind: "function",
       file: `src/f${i}.ts`,
       start_line: 1,
       end_line: 5,
-      source: tmpl,
       signature: `function fn${i}()`,
+    };
+    Object.defineProperty(symbol, "source", {
+      enumerable: true,
+      get: () => { sourceRead.add(id); return tmpl; },
     });
+    symbols.push(symbol);
   }
   return {
     repo: "test",
@@ -45,39 +54,45 @@ function makeLargeIndex(n: number): CodeIndex {
 }
 
 /**
- * Counts how often the event loop got a turn while `task` ran: a `setImmediate` chain that re-arms
- * itself fires once per loop turn, so it can only advance when the task awaits a macrotask. A
- * synchronous scan gives it no turn at all.
+ * The most symbols the scan read between two event-loop turns. A self-re-arming `setImmediate`
+ * fires once per loop turn and samples how many symbols have been read so far, so the largest step
+ * between samples is the longest stretch the scan ran without giving the loop a turn.
  *
- * It counts turns, not milliseconds. The old version asserted the longest gap between turns was
+ * It counts symbols, not milliseconds. The old version asserted the longest gap between turns was
  * under 100 ms, which a loaded CI runner broke on its own ("expected 126 to be less than 100", run
- * 41577995004 on a docs-only PR); how often the scan yields does not depend on the host.
+ * 41577995004 on a docs-only PR).
  */
-async function countEventLoopTurns<T>(task: () => Promise<T>): Promise<{ turns: number; result: T }> {
-  let turns = 0;
+async function longestStretchWithoutATurn(task: () => Promise<unknown>): Promise<number> {
+  const samples: number[] = [0];
   let stop = false;
   const tick = (): void => {
-    turns++;
+    samples.push(sourceRead.size);
     if (!stop) setImmediate(tick);
   };
   setImmediate(tick);
-  const result = await task();
-  stop = true;
-  return { turns, result };
+  try {
+    await task();
+  } finally {
+    stop = true;
+  }
+  samples.push(sourceRead.size);
+  let longest = 0;
+  for (let i = 1; i < samples.length; i++) longest = Math.max(longest, samples[i]! - samples[i - 1]!);
+  return longest;
 }
 
 describe("event loop yields in heavy CodeSift tools", () => {
-  it("findPerfHotspots gives the event loop a turn at least every 512 symbols of a 20k-symbol scan", async () => {
+  it("findPerfHotspots reads at most 512 symbols between event-loop turns on a 20k-symbol index", async () => {
     // Bug caught: a scan that stops yielding (or yields far less often) blocks the MCP transport
     // for the whole scan, and the client drops the connection (-32000). The scan yields every 256
-    // symbols, 78 turns over 20 000; the floor is half that, so retuning the interval to 512 still
-    // passes while removing the yield (0 turns until the scan ends) fails. A limit the scan cannot
-    // reach keeps it from stopping early at max_results.
-    const { turns, result } = await countEventLoopTurns(() =>
+    // symbols; without the yield the whole 20 000 are read in one stretch. 512 leaves room to
+    // retune the interval. The limit is one the scan cannot reach, so it reads every symbol.
+    sourceRead.clear();
+    const longest = await longestStretchWithoutATurn(() =>
       findPerfHotspots("test", { max_results: 1_000_000 }),
     );
 
-    expect(result.findings.length).toBeGreaterThan(0);
-    expect(turns).toBeGreaterThanOrEqual(Math.floor(20_000 / 512));
+    expect(sourceRead.size).toBe(SYMBOLS);
+    expect(longest).toBeLessThanOrEqual(512);
   }, 30_000);
 });
