@@ -1,6 +1,12 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { findPerfHotspots } from "../../src/tools/perf-tools.js";
 import type { CodeIndex, CodeSymbol } from "../../src/types.js";
+
+// Hoisted with the mock factory that reads them. `sourceRead` holds the symbols the scan has read so
+// far: every symbol's `source` is a getter that records it.
+const { SYMBOLS, sourceRead } = vi.hoisted(() => ({ SYMBOLS: 20_000, sourceRead: new Set<string>() }));
+
+beforeEach(() => sourceRead.clear());
 
 // findPerfHotspots reads through the narrow accessors (ADR-004 stage 2). The helper delivers a
 // stream as ONE batch — the shape of a resident index — which is the worst case for yielding.
@@ -8,10 +14,6 @@ vi.mock("../../src/tools/index-tools.js", async () => {
   const { narrowIndexMock } = await import("../helpers/narrow-index-mock.js");
   return narrowIndexMock(async (_repo: unknown): Promise<CodeIndex> => makeLargeIndex(SYMBOLS));
 });
-
-const SYMBOLS = 20_000;
-// Which symbols the scan has read so far: every symbol's `source` is a getter that records it.
-const sourceRead = new Set<string>();
 
 function makeLargeIndex(n: number): CodeIndex {
   const symbols: CodeSymbol[] = [];
@@ -87,7 +89,6 @@ describe("event loop yields in heavy CodeSift tools", () => {
     // for the whole scan, and the client drops the connection (-32000). The scan yields every 256
     // symbols; without the yield the whole 20 000 are read in one stretch. 512 leaves room to
     // retune the interval. The limit is one the scan cannot reach, so it reads every symbol.
-    sourceRead.clear();
     const longest = await longestStretchWithoutATurn(() =>
       findPerfHotspots("test", { max_results: 1_000_000 }),
     );
