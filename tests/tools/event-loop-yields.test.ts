@@ -45,51 +45,39 @@ function makeLargeIndex(n: number): CodeIndex {
 }
 
 /**
- * Measures the maximum gap between successive `setImmediate` callbacks
- * during the execution of `task`. If the event loop is blocked by a
- * synchronous loop, callbacks queue up and the gap explodes.
+ * Counts how often the event loop got a turn while `task` ran: a `setImmediate` chain that re-arms
+ * itself fires once per loop turn, so it can only advance when the task awaits a macrotask. A
+ * synchronous scan gives it no turn at all.
  *
- * Returns `{ maxGapMs, taskMs }`.
+ * It counts turns, not milliseconds. The old version asserted the longest gap between turns was
+ * under 100 ms, which a loaded CI runner broke on its own ("expected 126 to be less than 100", run
+ * 41577995004 on a docs-only PR); how often the scan yields does not depend on the host.
  */
-async function measureMaxEventLoopGap<T>(task: () => Promise<T>): Promise<{ maxGapMs: number; taskMs: number; result: T }> {
-  const ticks: number[] = [Date.now()];
+async function countEventLoopTurns<T>(task: () => Promise<T>): Promise<{ turns: number; result: T }> {
+  let turns = 0;
   let stop = false;
   const tick = (): void => {
-    ticks.push(Date.now());
+    turns++;
     if (!stop) setImmediate(tick);
   };
   setImmediate(tick);
-
-  const t0 = Date.now();
   const result = await task();
-  const taskMs = Date.now() - t0;
   stop = true;
-  // Allow the final setImmediate to settle so we capture the post-task tick
-  await new Promise((r) => setImmediate(r));
-
-  let maxGapMs = 0;
-  for (let i = 1; i < ticks.length; i++) {
-    maxGapMs = Math.max(maxGapMs, ticks[i]! - ticks[i - 1]!);
-  }
-  return { maxGapMs, taskMs, result };
+  return { turns, result };
 }
 
 describe("event loop yields in heavy CodeSift tools", () => {
-  it("findPerfHotspots yields at least every 100ms on a 20k-symbol index", async () => {
-    // Without yields, this loop blocks the event loop for the full duration of the scan
-    // (typically 200ms-2s+ depending on CPU). With yields every 512 iterations,
-    // max gap should stay well under 100ms — leaving room for MCP ping responses.
-    const { maxGapMs, taskMs } = await measureMaxEventLoopGap(() =>
-      findPerfHotspots("test", { max_results: 1000 }),
+  it("findPerfHotspots gives the event loop a turn at least every 512 symbols of a 20k-symbol scan", async () => {
+    // Bug caught: a scan that stops yielding (or yields far less often) blocks the MCP transport
+    // for the whole scan, and the client drops the connection (-32000). The scan yields every 256
+    // symbols, 78 turns over 20 000; the floor is half that, so retuning the interval to 512 still
+    // passes while removing the yield (0 turns until the scan ends) fails. A limit the scan cannot
+    // reach keeps it from stopping early at max_results.
+    const { turns, result } = await countEventLoopTurns(() =>
+      findPerfHotspots("test", { max_results: 1_000_000 }),
     );
 
-    // Sanity: the task did real work (not zero-cost short-circuit). On
-    // fast machines findPerfHotspots over 20k symbols can finish in ~15ms,
-    // so the floor is set generously low — the meaningful assertion is the
-    // event-loop responsiveness check below.
-    expect(taskMs).toBeGreaterThan(5);
-
-    // Core assertion: event loop was responsive throughout the scan
-    expect(maxGapMs).toBeLessThan(100);
+    expect(result.findings.length).toBeGreaterThan(0);
+    expect(turns).toBeGreaterThanOrEqual(Math.floor(20_000 / 512));
   }, 30_000);
 });
