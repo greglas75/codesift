@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Auto-prune runs one check at a time.** A scheduler tick that fired while the previous check was
+  between reading and writing the stamp spawned a second sweep. Seen only in tests under load (the
+  daemon checks hourly), where it made `tests/cli/auto-prune.test.ts` flaky.
+
 ## [0.26.4] — 2026-11-02
 
 Clients can now tell a lookup from a tool that changes something.

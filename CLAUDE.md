@@ -353,6 +353,10 @@ When you add a new tool, change tool count, update benchmarks, or modify behavio
    - `rules/codesift.md` + `rules/codesift.mdc` + `rules/codex.md` + `rules/gemini.md` — update tool mapping
    - `CLAUDE.md` — update architecture section, tool count
    - `README.md` — update tool count, benchmarks, feature table
+   - `src/register-tools/annotations.ts` — classify the tool (read-only, writer, destructive, open
+     world). An unclassified tool sends no MCP annotations and fails
+     `tests/tools/register/tool-annotations.test.ts`. A tool that writes anything (a profile file, the
+     tool list via `enableToolByName`) is not read-only; one that calls a network service is open world.
    - Bump version + publish: see "Release & Install" above
 
 2. **Website (../codesift-website):**
@@ -1327,9 +1331,14 @@ collectable orphans sat in the directory, and only re-running prune by hand coul
 happened.
 
 `runAutoPruneOnce` reads the stamp with `await readFile` and writes it after, so two calls closer
-together than that round trip both see the old stamp and both spawn. Unreachable at an hourly
-interval with a daily throttle — but it is why `tests/cli/auto-prune.test.ts` uses a 40 ms tick and
-not 1 ms, where it fails with "expected 2 to be 1".
+together than that round trip both see the old stamp and both spawn. **`scheduleAutoPrune` therefore
+runs one check at a time** (an `inFlight` flag; a tick that finds a check still running is skipped,
+the next one comes an hour later). Before that the race was left to the tick length — "unreachable
+at an hourly interval" — and the test's 40 ms tick was the only guard: under farm load the stamp's
+round trip outlasted it and the full suite failed with "expected 3 to be 2" (PR #81, 2026-11-02).
+The regression test slows the stamp read with a hoisted `node:fs/promises` mock and a 1 ms tick; it
+fails without the flag. Only this scheduler is serialised: two daemons on one data dir could still
+both sweep (one daemon per machine today).
 
 **The 2026-09-27 note that deleted worktrees were NOT the cause has a shelf life.** It measured 4 of
 1,511 roots gone holding 0.1 GB, and that was true then; seven days later it was 69 and 37 GB, i.e.
