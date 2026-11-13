@@ -56,6 +56,7 @@ const GENERIC_WORDS: ReadonlySet<string> = new Set([
 /** Split an identifier or phrase into lower-case words: kebab, snake, camel and acronym (`HTTPClient`) boundaries. */
 function words(text: string): string[] {
   return text
+    .replace(/\\[A-Za-z]/g, " ") // regex escapes: `\bpercent\b` searches for "percent", not "bpercent"
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .toLowerCase()
@@ -78,17 +79,22 @@ export function relevantTerms(filePath: string): string[] {
  * The fields of a lookup that hold what the agent searched FOR. Paths, repo names and options do not count: a
  * search scoped to the right folder for an unrelated symbol is not a look at the new code, and matching key names
  * would let `query.ts` unlock on every `{ query: … }`. find_clones has no query; its file_pattern is the lookup.
+ * A shell command and an agent prompt count whole (their paths too): telling the searched word from the scope in
+ * free text is guesswork, and a false unlock only costs a missed nudge, while a false deny stops real work. For the
+ * same reason a file whose name has no usable word (all generic, under 4 letters, non-ASCII) keeps any-lookup.
  */
 const LOOKUP_FIELDS: ReadonlySet<string> = new Set(["query", "queries", "pattern", "command", "prompt", "symbol_name", "name_pattern"]);
 
-function lookupText(name: string, input: unknown): string[] {
-  if (!input || typeof input !== "object") return [];
-  const fields = input as Record<string, unknown>;
+function lookupText(name: string, input: unknown, depth = 0): string[] {
+  if (!input || typeof input !== "object" || depth > 2) return [];
   const keys = name.endsWith("find_clones") ? new Set([...LOOKUP_FIELDS, "file_pattern"]) : LOOKUP_FIELDS;
   const out: string[] = [];
-  for (const [k, v] of Object.entries(fields)) {
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
     if (!keys.has(k)) continue;
-    for (const item of Array.isArray(v) ? v : [v]) if (typeof item === "string") out.push(item);
+    for (const item of Array.isArray(v) ? v : [v]) {
+      if (typeof item === "string") out.push(item);
+      else out.push(...lookupText(name, item, depth + 1)); // codebase_retrieval: queries = [{ type, query }]
+    }
   }
   return out;
 }

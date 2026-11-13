@@ -145,6 +145,9 @@ describe("lookupNames", () => {
     ["the right folder, an unrelated pattern", "Grep", { pattern: "useQuery", path: "src/reporting" }, ["reporting"], false],
     ["a substring inside another word", "Grep", { pattern: "update" }, ["date"], false],
     ["find_clones over the folder", "mcp__codesift__find_clones", { file_pattern: "reporting" }, ["reporting"], true],
+    // Bugs caught by the second review: regex escapes fused with the word, batch queries were objects
+    ["a regex with word boundaries", "Grep", { pattern: "\\bpercent\\b" }, ["percent"], true],
+    ["a batch of query objects", "mcp__codesift__codebase_retrieval", { queries: [{ type: "semantic", query: "percent formatter" }] }, ["percent"], true],
   ])("%s → %s", (_label, name, input, terms, expected) => {
     expect(lookupNames(name, input, terms)).toBe(expected);
   });
