@@ -128,6 +128,8 @@ describe("relevantTerms", () => {
     // generic names say nothing about the code: any lookup counts for them
     ["generic stem and folder", "/r/src/utils/index.ts", []],
     ["Windows path", "C:\\r\\src\\quota\\quotaGuard.ts", ["quota", "guard"]],
+    // Bug caught by the third review: non-ASCII letters split a word into fragments that became required terms
+    ["non-ASCII stem", "/r/src/billing/płatności.ts", ["płatności", "billing"]],
   ])("%s → %j", (_label, path, expected) => {
     expect(relevantTerms(path)).toEqual(expected);
   });
