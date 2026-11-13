@@ -53,34 +53,58 @@ const GENERIC_WORDS: ReadonlySet<string> = new Set([
   "src", "app", "apps", "packages", "page", "pages", "view", "views", "store", "api", "new", "data",
 ]);
 
+/** Split an identifier or phrase into lower-case words: kebab, snake, camel and acronym (`HTTPClient`) boundaries. */
+function words(text: string): string[] {
+  return text
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
 /**
- * Words a lookup must contain to count for `filePath`: the file stem's and folder's words (kebab, snake, camel
- * split), lower-cased, at least 4 letters, generic ones dropped, long ones cut to 6 letters so a plural or a
- * `-ing` form still matches. Empty → nothing specific to ask for, and any lookup counts.
+ * Words a lookup must name to count for `filePath`: the words of the file stem and its folder, at least 4 letters,
+ * generic ones dropped. Empty → nothing specific to ask for, and any lookup counts.
  */
 export function relevantTerms(filePath: string): string[] {
   const parts = filePath.split(/[\\/]/).filter(Boolean);
   const stem = (parts.pop() ?? "").replace(/\.[^.]+$/, "");
   const folder = parts.pop() ?? "";
-  const words = `${stem} ${folder}`
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length >= 4 && !GENERIC_WORDS.has(w));
-  return [...new Set(words.map((w) => (w.length > 6 ? w.slice(0, 6) : w)))];
+  return [...new Set([...words(stem), ...words(folder)].filter((w) => w.length >= 4 && !GENERIC_WORDS.has(w)))];
 }
 
-/** Does this lookup's input name any of `terms`? (No terms: every lookup does.) */
-export function lookupNames(input: unknown, terms: readonly string[]): boolean {
-  if (terms.length === 0) return true;
-  let text: string;
-  try {
-    text = JSON.stringify(input ?? "").toLowerCase();
-  } catch {
-    return true;
+/**
+ * The fields of a lookup that hold what the agent searched FOR. Paths, repo names and options do not count: a
+ * search scoped to the right folder for an unrelated symbol is not a look at the new code, and matching key names
+ * would let `query.ts` unlock on every `{ query: … }`. find_clones has no query; its file_pattern is the lookup.
+ */
+const LOOKUP_FIELDS: ReadonlySet<string> = new Set(["query", "queries", "pattern", "command", "prompt", "symbol_name", "name_pattern"]);
+
+function lookupText(name: string, input: unknown): string[] {
+  if (!input || typeof input !== "object") return [];
+  const fields = input as Record<string, unknown>;
+  const keys = name.endsWith("find_clones") ? new Set([...LOOKUP_FIELDS, "file_pattern"]) : LOOKUP_FIELDS;
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (!keys.has(k)) continue;
+    for (const item of Array.isArray(v) ? v : [v]) if (typeof item === "string") out.push(item);
   }
-  const squashed = text.replace(/[^a-z0-9]+/g, "");
-  return terms.some((t) => text.includes(t) || squashed.includes(t));
+  return out;
+}
+
+/**
+ * Does this lookup name any of `terms`? A term matches a searched word that starts with the term's first 6 letters
+ * (plural, `-ing`, `formatting` for `format`), or a word of 4+ letters the term starts with (`auth` for
+ * `authentication`). Whole words only: `date` must not match `update`. No terms: every lookup counts.
+ */
+export function lookupNames(name: string, input: unknown, terms: readonly string[]): boolean {
+  if (terms.length === 0) return true;
+  const searched = lookupText(name, input).flatMap(words);
+  return terms.some((t) => {
+    const head = t.slice(0, 6);
+    return searched.some((w) => w.startsWith(head) || (w.length >= 4 && t.startsWith(w)));
+  });
 }
 
 /** A tool_use block that looked something up in the repo. */
@@ -116,7 +140,7 @@ function entrySearched(entry: TranscriptEntry, terms: readonly string[]): boolea
   return content.some((block) => {
     const b = block as { type?: unknown; name?: unknown; input?: unknown };
     return b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input) &&
-      lookupNames(b.input, terms);
+      lookupNames(b.name, b.input, terms);
   });
 }
 
