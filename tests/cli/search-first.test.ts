@@ -8,7 +8,9 @@ import {
   isGatedNewFile,
   isHumanPrompt,
   isSearchToolUse,
+  lookupNames,
   readLinesBackward,
+  relevantTerms,
   searchedSinceLastPrompt,
 } from "../../src/cli/hooks/search-first.js";
 
@@ -86,6 +88,13 @@ describe("searchedSinceLastPrompt", () => {
     expect(searchedSinceLastPrompt(newestFirst(prompt("a"), toolUse("Grep"), prompt("b"), toolUse("Read")))).toBe(false);
   });
 
+  it("does not count a lookup that names none of the new file's words", () => {
+    // Bug caught: any lookup unlocked the gate, and agents always search for something before writing
+    const lines = newestFirst(prompt("a"), toolUse("Grep", { pattern: "useQuery" }));
+    expect(searchedSinceLastPrompt(lines, ["format", "percen"])).toBe(false);
+    expect(searchedSinceLastPrompt(lines)).toBe(true);
+  });
+
   it("is null when the transcript holds no prompt and no lookup", () => {
     expect(searchedSinceLastPrompt(newestFirst(toolUse("Read"), toolResult(), "not json"))).toBeNull();
   });
@@ -107,6 +116,29 @@ describe("readLinesBackward", () => {
     const path = join(dir, "t.jsonl");
     writeFileSync(path, "aaaaaaaaaa\nbbb\nccc\n");
     expect([...readLinesBackward(path, 9, 4)]).toEqual(["ccc", "bbb"]);
+  });
+});
+
+describe("relevantTerms", () => {
+  it.each([
+    ["kebab stem + folder", "/r/apps/reporting/format-percent.ts", ["format", "percen", "report"]],
+    ["camelCase stem", "/r/src/lib/formatPercent.ts", ["format", "percen"]],
+    // generic names say nothing about the code: any lookup counts for them
+    ["generic stem and folder", "/r/src/utils/index.ts", []],
+    ["Windows path", "C:\\r\\src\\quota\\quotaGuard.ts", ["quota", "guard"]],
+  ])("%s → %j", (_label, path, expected) => {
+    expect(relevantTerms(path)).toEqual(expected);
+  });
+});
+
+describe("lookupNames", () => {
+  it.each([
+    ["a symbol query", { query: "formatPercent" }, true],
+    ["a natural-language query", { query: "percentage formatter for reports" }, true],
+    ["a kebab grep pattern", { pattern: "format-percent" }, true],
+    ["an unrelated query", { query: "useQuery" }, false],
+  ])("%s → %s", (_label, input, expected) => {
+    expect(lookupNames(input, ["format", "percen"])).toBe(expected);
   });
 });
 
@@ -179,9 +211,17 @@ describe("handlePrecheckWrite", () => {
     expect(stdout).not.toContain("semantic_search");
   });
 
-  it("allows the file once a lookup happened after the prompt", async () => {
-    await run(join(repo, "src", "format-percent.ts"), transcript(prompt("add it"), toolUse("mcp__codesift__search_symbols"), toolResult()));
+  it("allows the file once a lookup naming it happened after the prompt", async () => {
+    await run(join(repo, "src", "format-percent.ts"),
+      transcript(prompt("add it"), toolUse("mcp__codesift__search_symbols", { query: "formatPercent" }), toolResult()));
     expect(denied()).toBe(false);
+  });
+
+  it("still denies when the only lookup since the prompt was about something else, naming the words it wants", async () => {
+    await run(join(repo, "src", "format-percent.ts"),
+      transcript(prompt("add it"), toolUse("Grep", { pattern: "useQuery" }), toolResult()));
+    expect(denied()).toBe(true);
+    expect(stdout).toContain('\\"format\\" or \\"percen\\"');
   });
 
   it.each([

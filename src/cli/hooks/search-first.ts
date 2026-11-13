@@ -12,9 +12,11 @@ import { readRawInput } from "./input.js";
  * an agent that goes straight to "create helpers/formatPercent.ts" never meets
  * any of them. This gate fires on exactly that moment — a NEW production source
  * file inside an indexed repo — and asks for one lookup since the last human
- * prompt before the file may be created. Any repo search counts (CodeSift
- * discovery tools, Grep/Glob, grep/rg in Bash, an Explore agent), so the gate
- * never demands a capability the caller lacks.
+ * prompt that names the new code (a word of its file name or folder) before the
+ * file may be created. Any repo search tool counts (CodeSift discovery tools,
+ * Grep/Glob, grep/rg in Bash, an Explore agent), so the gate never demands a
+ * capability the caller lacks. 2026-11-13: when ANY lookup unlocked it, the gate
+ * almost never fired — agents always search for something before writing.
  *
  * It fails OPEN everywhere: an unreadable or missing transcript, a transcript
  * too large to scan, an unknown hook payload — all allow. A false deny stops
@@ -44,6 +46,43 @@ interface TranscriptEntry {
   message?: { content?: unknown } | null;
 }
 
+/** File-name words too generic to say what a file does: a lookup for them proves nothing. */
+const GENERIC_WORDS: ReadonlySet<string> = new Set([
+  "index", "main", "utils", "util", "helper", "helpers", "types", "type", "constants", "config", "common", "shared",
+  "service", "services", "component", "components", "hooks", "model", "models", "module", "lib", "core", "base",
+  "src", "app", "apps", "packages", "page", "pages", "view", "views", "store", "api", "new", "data",
+]);
+
+/**
+ * Words a lookup must contain to count for `filePath`: the file stem's and folder's words (kebab, snake, camel
+ * split), lower-cased, at least 4 letters, generic ones dropped, long ones cut to 6 letters so a plural or a
+ * `-ing` form still matches. Empty → nothing specific to ask for, and any lookup counts.
+ */
+export function relevantTerms(filePath: string): string[] {
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  const stem = (parts.pop() ?? "").replace(/\.[^.]+$/, "");
+  const folder = parts.pop() ?? "";
+  const words = `${stem} ${folder}`
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4 && !GENERIC_WORDS.has(w));
+  return [...new Set(words.map((w) => (w.length > 6 ? w.slice(0, 6) : w)))];
+}
+
+/** Does this lookup's input name any of `terms`? (No terms: every lookup does.) */
+export function lookupNames(input: unknown, terms: readonly string[]): boolean {
+  if (terms.length === 0) return true;
+  let text: string;
+  try {
+    text = JSON.stringify(input ?? "").toLowerCase();
+  } catch {
+    return true;
+  }
+  const squashed = text.replace(/[^a-z0-9]+/g, "");
+  return terms.some((t) => text.includes(t) || squashed.includes(t));
+}
+
 /** A tool_use block that looked something up in the repo. */
 export function isSearchToolUse(name: string, input: unknown): boolean {
   if (NATIVE_SEARCH_TOOLS.has(name)) return true;
@@ -70,21 +109,23 @@ export function isHumanPrompt(entry: TranscriptEntry): boolean {
   return Array.isArray(content) && !content.some((b) => (b as { type?: unknown })?.type === "tool_result");
 }
 
-function entrySearched(entry: TranscriptEntry): boolean {
+function entrySearched(entry: TranscriptEntry, terms: readonly string[]): boolean {
   if (entry.type !== "assistant") return false;
   const content = entry.message?.content;
   if (!Array.isArray(content)) return false;
   return content.some((block) => {
     const b = block as { type?: unknown; name?: unknown; input?: unknown };
-    return b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input);
+    return b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input) &&
+      lookupNames(b.input, terms);
   });
 }
 
 /**
- * Walk transcript lines from the newest: a search before reaching the latest
- * human prompt → true; the prompt first → false. `null` = could not tell.
+ * Walk transcript lines from the newest: a search naming one of `terms` before
+ * reaching the latest human prompt → true; the prompt first → false. `null` =
+ * could not tell. No `terms` (the default): any search counts.
  */
-export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>): boolean | null {
+export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, terms: readonly string[] = []): boolean | null {
   for (const line of linesNewestFirst) {
     // Cheap filters first: most lines are attachments, api records and huge tool results. A tool result
     // is neither a lookup nor a prompt; the unescaped marker cannot occur inside prompt text (JSON escapes it).
@@ -96,7 +137,7 @@ export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>): boo
     } catch {
       continue;
     }
-    if (entrySearched(entry)) return true;
+    if (entrySearched(entry, terms)) return true;
     if (isHumanPrompt(entry)) return false;
   }
   return null;
@@ -148,7 +189,7 @@ export function isGatedNewFile(filePath: string): boolean {
   return !existsSync(filePath);
 }
 
-function denyReason(filePath: string, serverRunning: boolean): string {
+function denyReason(filePath: string, serverRunning: boolean, terms: readonly string[]): string {
   const stem = basename(filePath).replace(/\.[^.]+$/, "");
   const dir = basename(dirname(filePath));
   const lookups = serverRunning
@@ -159,7 +200,8 @@ function denyReason(filePath: string, serverRunning: boolean): string {
   return (
     `New source file ${JSON.stringify(stem + extname(filePath))}: check whether this already exists before creating it.\n` +
     `${lookups}\n` +
-    `Reuse or extend what you find; if nothing fits, write the file again — one lookup since the last prompt unlocks it.\n` +
+    `Reuse or extend what you find; if nothing fits, write the file again — one lookup since the last prompt ` +
+    (terms.length ? `whose query names this code (${terms.map((t) => JSON.stringify(t)).join(" or ")}) unlocks it.\n` : `unlocks it.\n`) +
     `(CODESIFT_SEARCH_FIRST=0 turns this gate off.)`
   );
 }
@@ -202,8 +244,9 @@ export async function handlePrecheckWrite(): Promise<void> {
     }
     const transcript = transcriptFor(transcriptPath, agentId);
     if (!transcript || !existsSync(transcript)) return process.exit(0);
-    if (searchedSinceLastPrompt(readLinesBackward(transcript)) !== false) return process.exit(0);
-    denyTool(denyReason(filePath, isCodesiftServerRunning()));
+    const terms = relevantTerms(filePath);
+    if (searchedSinceLastPrompt(readLinesBackward(transcript), terms) !== false) return process.exit(0);
+    denyTool(denyReason(filePath, isCodesiftServerRunning(), terms));
   } catch {
     process.exit(0);
   }
