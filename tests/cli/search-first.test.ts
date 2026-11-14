@@ -8,7 +8,9 @@ import {
   isGatedNewFile,
   isHumanPrompt,
   isSearchToolUse,
+  lookupNames,
   readLinesBackward,
+  relevantTerms,
   searchedSinceLastPrompt,
 } from "../../src/cli/hooks/search-first.js";
 
@@ -86,6 +88,13 @@ describe("searchedSinceLastPrompt", () => {
     expect(searchedSinceLastPrompt(newestFirst(prompt("a"), toolUse("Grep"), prompt("b"), toolUse("Read")))).toBe(false);
   });
 
+  it("does not count a lookup that names none of the new file's words", () => {
+    // Bug caught: any lookup unlocked the gate, and agents always search for something before writing
+    const lines = newestFirst(prompt("a"), toolUse("Grep", { pattern: "useQuery" }));
+    expect(searchedSinceLastPrompt(lines, ["format", "percent"])).toBe(false);
+    expect(searchedSinceLastPrompt(lines)).toBe(true);
+  });
+
   it("is null when the transcript holds no prompt and no lookup", () => {
     expect(searchedSinceLastPrompt(newestFirst(toolUse("Read"), toolResult(), "not json"))).toBeNull();
   });
@@ -107,6 +116,42 @@ describe("readLinesBackward", () => {
     const path = join(dir, "t.jsonl");
     writeFileSync(path, "aaaaaaaaaa\nbbb\nccc\n");
     expect([...readLinesBackward(path, 9, 4)]).toEqual(["ccc", "bbb"]);
+  });
+});
+
+describe("relevantTerms", () => {
+  it.each([
+    ["kebab stem + folder", "/r/apps/reporting/format-percent.ts", ["format", "percent", "reporting"]],
+    ["camelCase stem", "/r/src/lib/formatPercent.ts", ["format", "percent"]],
+    // Bug caught: `HTTPClient` stayed one word, so a lookup for "client" never counted
+    ["acronym stem", "/r/src/net/HTTPClient.ts", ["http", "client"]],
+    // generic names say nothing about the code: any lookup counts for them
+    ["generic stem and folder", "/r/src/utils/index.ts", []],
+    ["Windows path", "C:\\r\\src\\quota\\quotaGuard.ts", ["quota", "guard"]],
+    // Bug caught by the third review: non-ASCII letters split a word into fragments that became required terms
+    ["non-ASCII stem", "/r/src/billing/płatności.ts", ["płatności", "billing"]],
+  ])("%s → %j", (_label, path, expected) => {
+    expect(relevantTerms(path)).toEqual(expected);
+  });
+});
+
+describe("lookupNames", () => {
+  it.each([
+    ["a symbol query", "mcp__codesift__search_symbols", { query: "formatPercent" }, ["format", "percent"], true],
+    ["a plural in a phrase", "mcp__codesift__semantic_search", { query: "percentages in reports" }, ["percent"], true],
+    ["a kebab grep pattern", "Grep", { pattern: "format-percent" }, ["format", "percent"], true],
+    ["a short form of a long word", "Grep", { pattern: "auth" }, ["authentication"], true],
+    ["an unrelated query", "mcp__codesift__search_symbols", { query: "useQuery" }, ["format", "percent"], false],
+    // Bugs caught by review: the whole serialized input was matched, so keys and paths unlocked the gate
+    ["a term equal to a key name", "mcp__codesift__search_symbols", { query: "unrelatedSymbol" }, ["query", "cache"], false],
+    ["the right folder, an unrelated pattern", "Grep", { pattern: "useQuery", path: "src/reporting" }, ["reporting"], false],
+    ["a substring inside another word", "Grep", { pattern: "update" }, ["date"], false],
+    ["find_clones over the folder", "mcp__codesift__find_clones", { file_pattern: "reporting" }, ["reporting"], true],
+    // Bugs caught by the second review: regex escapes fused with the word, batch queries were objects
+    ["a regex with word boundaries", "Grep", { pattern: "\\bpercent\\b" }, ["percent"], true],
+    ["a batch of query objects", "mcp__codesift__codebase_retrieval", { queries: [{ type: "semantic", query: "percent formatter" }] }, ["percent"], true],
+  ])("%s → %s", (_label, name, input, terms, expected) => {
+    expect(lookupNames(name, input, terms)).toBe(expected);
   });
 });
 
@@ -179,9 +224,17 @@ describe("handlePrecheckWrite", () => {
     expect(stdout).not.toContain("semantic_search");
   });
 
-  it("allows the file once a lookup happened after the prompt", async () => {
-    await run(join(repo, "src", "format-percent.ts"), transcript(prompt("add it"), toolUse("mcp__codesift__search_symbols"), toolResult()));
+  it("allows the file once a lookup naming it happened after the prompt", async () => {
+    await run(join(repo, "src", "format-percent.ts"),
+      transcript(prompt("add it"), toolUse("mcp__codesift__search_symbols", { query: "formatPercent" }), toolResult()));
     expect(denied()).toBe(false);
+  });
+
+  it("still denies when the only lookup since the prompt was about something else, naming the words it wants", async () => {
+    await run(join(repo, "src", "format-percent.ts"),
+      transcript(prompt("add it"), toolUse("Grep", { pattern: "useQuery" }), toolResult()));
+    expect(denied()).toBe(true);
+    expect(stdout).toContain('\\"format\\" or \\"percent\\"');
   });
 
   it.each([
