@@ -305,7 +305,7 @@ sender does) labels it `ryzen-tf`.
 Large responses auto-cascade: >52.5K chars → compact format, >87.5K → counts only, >105K → hard truncate. Skipped when `detail_level` or `token_budget` is explicitly set. Annotation `[compact]` or `[counts]` prepended.
 
 ### CLI hooks (NEW)
-`codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift), PostToolUse (auto index-file after Edit/Write), SessionStart (inject CodeSift availability prompt + wiki project overview), and PreCompact (inject session snapshot before context compaction). Hooks go to `~/.claude/settings.json` (user-level `settings.local.json` is NOT read by Claude Code — versions ≤0.8.9 wrote there, leaving all hooks dead; setup now migrates legacy entries out).
+`codesift setup claude --hooks` installs PreToolUse (redirect Read on large code files to CodeSift; `precheck-write`: a new production file needs a lookup of words from its name since the last prompt, `src/cli/hooks/search-first.ts`), PostToolUse (auto index-file after Edit/Write), SessionStart (inject CodeSift availability prompt + wiki project overview), and PreCompact (inject session snapshot before context compaction). Hooks go to `~/.claude/settings.json` (user-level `settings.local.json` is NOT read by Claude Code — versions ≤0.8.9 wrote there, leaving all hooks dead; setup now migrates legacy entries out).
 
 The `precheck-bash` hook lexes the command instead of regex-matching the raw string
 (`lexShellSegments` in `src/cli/hooks/pre-tool-use.ts`). Two false positives it used to hit: quoted

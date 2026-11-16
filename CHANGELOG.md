@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [0.26.5] — 2026-11-14
+
+The search-first gate now asks for a lookup of the code being written, not any lookup.
+
+### Changed
+
+- **`precheck-write` unlocks only on a lookup that names the new file.** Agents always run some search
+  after a prompt, so "any lookup" never denied (transcript measurement, 2026-11-13). The wanted words
+  are the file stem's and folder's words (split on camelCase, acronyms and any non-letter, 4+ letters,
+  generic words such as `utils`/`index` dropped); a lookup counts when a word it searched starts with a
+  wanted word's first 6 letters, or a searched word of 4+ letters is a prefix of a wanted one. Regex
+  escapes (`\b`, `\w`) are stripped first, and batch queries (`codebase_retrieval`) are read through.
+  The deny message names the wanted words. Codex is not covered yet: it fails open.
+
 ### Fixed
 
 - **Auto-prune runs one check at a time.** A scheduler tick that fired while the previous check was

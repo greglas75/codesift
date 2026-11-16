@@ -285,9 +285,10 @@ Setup auto-indexing and read-redirect hooks for Claude Code:
 codesift setup claude --hooks
 ```
 
-Installs two hooks in `~/.claude/settings.json`:
+Installs these hooks in `~/.claude/settings.json` (among others):
 
 - **PreToolUse** (`precheck-read`) — redirects `Read` on large code files to CodeSift tools
+- **PreToolUse** (`precheck-write`) — refuses a NEW production source file until a lookup since the last prompt searched for words of its name (`CODESIFT_SEARCH_FIRST=0` turns it off)
 - **PostToolUse** (`postindex-file`) — auto-runs `index_file` after `Edit` or `Write`
 
 This ensures the index stays current without manual `index_file` calls after every edit.
