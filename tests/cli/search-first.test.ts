@@ -214,6 +214,14 @@ describe("rankExistingFiles", () => {
     expect(rank(["src/format-percent/a.ts", "src/format-percent.ts"])).toEqual(["src/format-percent.ts", "src/format-percent/a.ts"]);
   });
 
+  // `exists` is a disk `stat`: asked in ranked order, it must stop once the cap is filled, not run for every candidate
+  it("asks `exists` only until the cap is filled", () => {
+    const asked: string[] = [];
+    const paths = ["src/a/format-percent.ts", "src/b/format-percent.ts", "src/c/format-percent.ts", "src/d/format-percent.ts"];
+    expect(rankExistingFiles(paths, terms, "x.ts", 2, (p) => (asked.push(p), true))).toHaveLength(2);
+    expect(asked).toHaveLength(2);
+  });
+
   it("drops what a stale index lists but the disk no longer has, before applying the cap", () => {
     const gone = new Set(["src/a/format-percent.ts"]);
     const kept = rankExistingFiles(["src/a/format-percent.ts", "src/b/format-percent.ts"], terms, "x.ts", 1, (p) => !gone.has(p));
@@ -245,6 +253,13 @@ describe("rankExistingSymbols", () => {
   it("keeps one entry per name and file, and lists the same name in two files twice", () => {
     const rows = [sym("formatPercent", "function", "a.ts"), sym("formatPercent", "function", "a.ts"), sym("formatPercent", "function", "b.ts")];
     expect(rankExistingSymbols(rows, words).map((r) => `${r.file}:${r.name}`)).toEqual(["a.ts:formatPercent", "b.ts:formatPercent"]);
+  });
+
+  it("asks `exists` only until the cap is filled", () => {
+    const asked: string[] = [];
+    const rows = ["A", "B", "C", "D"].map((n) => sym(`formatPercent${n}`, "function", `${n}.ts`));
+    expect(rankExistingSymbols(rows, words, 2, (f) => (asked.push(f), true))).toHaveLength(2);
+    expect(asked).toHaveLength(2);
   });
 
   it("drops symbols in files the disk no longer has", () => {

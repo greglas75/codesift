@@ -235,6 +235,8 @@ const HINT_LIMIT = 3;
 const HINT_SYMBOL_KINDS: readonly string[] = ["function", "class", "interface", "type", "method", "component", "hook", "enum"];
 const NOISE_DIR_NAMES: readonly string[] = ["node_modules", "dist", "build", "coverage", ".next", "vendor"];
 const NOISE_DIRS = new RegExp(`(^|[\\\\/])(${NOISE_DIR_NAMES.map((d) => d.replace(".", "\\.")).join("|")})[\\\\/]`);
+/** Source extensions as SQL (`LIKE` ignores ASCII case, as `extname(...).toLowerCase()` does). */
+const CODE_EXTENSIONS_SQL = `(${[...CODE_EXTENSIONS].map((e) => `path LIKE '%${e}'`).join(" OR ")})`;
 /** The same directories as SQL, anchored on a path segment (`%dist/%` alone would drop `redist/x.ts`). */
 const NOISE_DIRS_SQL = NOISE_DIR_NAMES.map((d) => `path NOT LIKE '${d}/%' AND path NOT LIKE '%/${d}/%'`).join(" AND ");
 
@@ -284,7 +286,12 @@ export function rankExistingFiles(
     scored.push({ path, score: 2 * ownHits + other.filter((t) => lower.includes(t)).length });
   }
   scored.sort((a, b) => b.score - a.score || a.path.length - b.path.length || a.path.localeCompare(b.path));
-  return scored.map((r) => r.path).filter(exists).slice(0, limit);
+  const kept: string[] = [];
+  for (const { path } of scored) {
+    if (kept.length >= limit) break; // ranked order, stop at the cap: at most `limit` + the stale ones `stat`ed
+    if (exists(path)) kept.push(path);
+  }
+  return kept;
 }
 
 /**
@@ -311,7 +318,12 @@ export function rankExistingSymbols(
     kept.push({ ...row, rank: lower.replace(/[^\p{L}\p{N}]/gu, "") === exact ? 0 : 1 });
   }
   kept.sort((a, b) => a.rank - b.rank || a.name.length - b.name.length || a.file.localeCompare(b.file) || a.start_line - b.start_line);
-  return kept.filter((r) => exists(r.file)).slice(0, limit).map(({ rank: _rank, ...row }) => row);
+  const out: SymbolRow[] = [];
+  for (const { rank: _rank, ...row } of kept) {
+    if (out.length >= limit) break;
+    if (exists(row.file)) out.push(row);
+  }
+  return out;
 }
 
 /** The deny message's "what already exists" block; `null` when there is nothing to show. */
@@ -355,14 +367,14 @@ export async function queryExistingCode(req: LookupRequest): Promise<ExistingCod
     const exists = (rel: string) => existsSync(join(req.root, rel));
     const fileTerms = req.terms.stem.length > 0 ? req.terms.stem : req.terms.folder;
     if (fileTerms.length > 0) {
-      // Most matching words first, and tests/declarations/build output/vendored code out in SQL, by the same
-      // rules as `isCandidateSource`: neither a length order nor a post-filter may let discarded rows fill the cap.
+      // Most matching words first, and non-source files/tests/declarations/build output/vendored code out in SQL, by the
+      // same rules as `isCandidateSource`: neither a length order nor a post-filter may let discarded rows fill the cap.
       const hit = fileTerms.map(() => "(path LIKE ?)").join(" + ");
       const patterns = fileTerms.map((t) => `%${t}%`);
       const rows = db.prepare(
         `SELECT path FROM files WHERE (${fileTerms.map(() => "path LIKE ?").join(" OR ")}) ` +
         "AND path NOT LIKE '%.test.%' AND path NOT LIKE '%.spec.%' AND path NOT LIKE '%.d.ts' " +
-        `AND ${NOISE_DIRS_SQL} AND path NOT LIKE '%/__tests__/%' ` +
+        `AND ${CODE_EXTENSIONS_SQL} AND ${NOISE_DIRS_SQL} AND path NOT LIKE '%/__tests__/%' ` +
         `ORDER BY ${hit} DESC, length(path) LIMIT 600`,
       ).all(...patterns, ...patterns) as Array<{ path: string }>;
       out.files = rankExistingFiles(rows.map((r) => r.path), req.terms, req.selfPath, HINT_LIMIT, exists);
