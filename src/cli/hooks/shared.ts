@@ -109,38 +109,48 @@ export function isCodesiftServerRunning(): boolean {
  * CLAUDE.md already warns about this trap for anyone AUDITING the registry. The production path
  * was doing it.
  */
+/** The SQLite store beside a registry `index_path` (same derivation as `sqlitePathFor`, without its storage imports). */
+export function sqliteArtifactPath(indexPath: string): string {
+  return indexPath.endsWith(".json") ? `${indexPath.slice(0, -".json".length)}.db` : `${indexPath}.db`;
+}
+
 function indexArtifactExists(indexPath: string): boolean {
-  if (existsSync(indexPath)) return true;
-  const sqlitePath = indexPath.endsWith(".json")
-    ? `${indexPath.slice(0, -".json".length)}.db`
-    : `${indexPath}.db`;
-  return existsSync(sqlitePath);
+  return existsSync(indexPath) || existsSync(sqliteArtifactPath(indexPath));
 }
 
 export function isCurrentRepoIndexed(): boolean {
   return isPathInIndexedRepo(process.cwd());
 }
 
-/** Does `path` (a directory or a file, existing or not) lie inside a repo with an index on disk? */
-export function isPathInIndexedRepo(path: string): boolean {
+/**
+ * The indexed repo whose root contains `path` (a directory or a file, existing or not), with its registry
+ * `index_path`; the deepest root wins when repos nest. `null` when there is none or the registry is unreadable.
+ */
+export function findIndexedRepo(path: string): { root: string; indexPath: string } | null {
   try {
     const raw = readFileSync(getRegistryPath(), "utf-8");
     const parsed = JSON.parse(raw) as { repos?: unknown };
-    if (!parsed.repos || typeof parsed.repos !== "object") return false;
+    if (!parsed.repos || typeof parsed.repos !== "object") return null;
 
-    const repos = Object.values(parsed.repos as Record<string, unknown>);
-
-    for (const repo of repos) {
+    let best: { root: string; indexPath: string } | null = null;
+    for (const repo of Object.values(parsed.repos as Record<string, unknown>)) {
       if (!repo || typeof repo !== "object") continue;
       const meta = repo as { root?: unknown; index_path?: unknown };
       if (typeof meta.root !== "string" || typeof meta.index_path !== "string") continue;
       if (!isCwdInsideRepo(path, meta.root)) continue;
-      if (indexArtifactExists(meta.index_path)) return true;
+      if (!indexArtifactExists(meta.index_path)) continue;
+      if (!best || meta.root.length > best.root.length) best = { root: meta.root, indexPath: meta.index_path };
     }
+    return best;
   } catch {
     // Hooks should never block normal shell use if registry inspection fails.
+    return null;
   }
-  return false;
+}
+
+/** Does `path` (a directory or a file, existing or not) lie inside a repo with an index on disk? */
+export function isPathInIndexedRepo(path: string): boolean {
+  return findIndexedRepo(path) !== null;
 }
 
 export function denyTool(reason: string): never {
