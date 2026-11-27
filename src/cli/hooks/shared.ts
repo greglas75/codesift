@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, posix as pathPosix, win32 as pathWin32 } from "node:path";
 import { homedir } from "node:os";
+import { sqlitePathFor } from "../../storage/index-paths.js";
 
 export const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   ".ts",
@@ -109,13 +110,12 @@ export function isCodesiftServerRunning(): boolean {
  * CLAUDE.md already warns about this trap for anyone AUDITING the registry. The production path
  * was doing it.
  */
-/** The SQLite store beside a registry `index_path` (same derivation as `sqlitePathFor`, without its storage imports). */
-export function sqliteArtifactPath(indexPath: string): string {
-  return indexPath.endsWith(".json") ? `${indexPath.slice(0, -".json".length)}.db` : `${indexPath}.db`;
-}
-
 function indexArtifactExists(indexPath: string): boolean {
-  return existsSync(indexPath) || existsSync(sqliteArtifactPath(indexPath));
+  try {
+    return existsSync(indexPath) || existsSync(sqlitePathFor(indexPath));
+  } catch {
+    return false; // sqlitePathFor rejects a non-canonical path: one odd registry entry must not hide the others
+  }
 }
 
 export function isCurrentRepoIndexed(): boolean {

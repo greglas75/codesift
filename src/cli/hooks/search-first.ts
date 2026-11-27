@@ -1,10 +1,10 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
+import { spawn } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { sqlitePathFor } from "../../storage/index-paths.js";
 import { isTestFileStrict } from "../../utils/test-file.js";
-import {
-  CODE_EXTENSIONS, denyTool, findIndexedRepo, isCodesiftServerRunning, isPathInIndexedRepo, sqliteArtifactPath,
-} from "./shared.js";
+import { CODE_EXTENSIONS, denyTool, findIndexedRepo, isCodesiftServerRunning, isPathInIndexedRepo } from "./shared.js";
 import { readRawInput } from "./input.js";
 
 /**
@@ -265,6 +265,7 @@ export function rankExistingFiles(
   limit = HINT_LIMIT,
 ): string[] {
   const own = terms.stem.length > 0 ? terms.stem : terms.folder;
+  if (own.length === 0) return []; // no word to match: every file would "match"
   const other = terms.stem.length > 0 ? terms.folder : [];
   // All words of a one- or two-word name (a lone `format` is a coincidence); one may differ in a longer one.
   const need = own.length >= 3 ? own.length - 1 : own.length;
@@ -290,14 +291,15 @@ export function rankExistingSymbols(
   limit = HINT_LIMIT,
 ): SymbolRow[] {
   if (stemWords.length === 0) return [];
-  const exact = stemWords.join("");
+  const wanted = stemWords.map((w) => w.toLowerCase());
+  const exact = wanted.join("");
   const seen = new Set<string>();
   const kept: Array<SymbolRow & { rank: number }> = [];
   for (const row of rows) {
     const lower = row.name.toLowerCase();
     const key = `${row.name}\u0000${row.file}`;
     if (seen.has(key) || !HINT_SYMBOL_KINDS.includes(row.kind) || !isCandidateSource(row.file)) continue;
-    if (!stemWords.every((w) => lower.includes(w))) continue;
+    if (!wanted.every((w) => lower.includes(w))) continue;
     seen.add(key);
     kept.push({ ...row, rank: lower.replace(/[^\p{L}\p{N}]/gu, "") === exact ? 0 : 1 });
   }
@@ -314,59 +316,60 @@ export function formatExistingCode(hits: ExistingCode | null): string | null {
   return lines.join("\n");
 }
 
-/** SQLite URI for a read-only open: `%`, `?` and `#` of the path would otherwise be read as URI syntax. */
-function readOnlyUri(dbPath: string): string {
-  return `file:${dbPath.replace(/%/g, "%25").replace(/\?/g, "%3f").replace(/#/g, "%23")}?mode=ro`;
+/** What the lookup needs, as plain data: it crosses a process boundary. */
+export interface LookupRequest {
+  dbPath: string;
+  selfPath: string;
+  terms: { stem: string[]; folder: string[] };
+  stemWords: string[];
+  budgetMs: number;
 }
 
 /**
- * Look the new file's name up in the repo's SQLite index — plain name matches, no embeddings (too slow for a hook
- * process). Opens the database read-only through the storage layer's own constructor (so the native store, when
- * on, stays the only SQLite copy in the process) and imports it lazily: the allow path never pays for it. Any
- * failure or a blown budget gives `null` — the caller then sends the plain message.
+ * The index queries: plain name matches, no embeddings (too slow for a hook). The database is opened read-only
+ * through the storage layer's own constructor (`loadSqliteCtor`: with the native store on, one SQLite copy owns
+ * every index database in the process) and `query_only` backs the option on a Node that ignores it. Never throws;
+ * `null` on any failure. Runs in a child process (`runInChild`) — see there for why.
  */
-export async function lookupExistingCode(filePath: string, budgetMs = HINT_BUDGET_MS): Promise<ExistingCode | null> {
+export async function queryExistingCode(req: LookupRequest): Promise<ExistingCode | null> {
   const started = Date.now();
-  const repo = findIndexedRepo(filePath);
-  if (!repo) return null;
-  const dbPath = sqliteArtifactPath(repo.indexPath);
-  if (!existsSync(dbPath)) return null;
-  const selfPath = relative(repo.root, filePath).split(sep).join("/");
-  const terms = nameTerms(filePath);
-  const stemWords = words(basename(filePath).replace(/\.[^.]+$/, "")).filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
-  const fileTerms = terms.stem.length > 0 ? terms.stem : terms.folder;
-  if (fileTerms.length === 0 && stemWords.length === 0) return null;
-
-  const { loadSqliteCtor } = await import("../../storage/sqlite/runtime.js");
-  const Ctor = await loadSqliteCtor();
-  if (!Ctor || Date.now() - started > budgetMs) return null;
   let db: DatabaseSync | undefined;
   try {
-    db = new Ctor(readOnlyUri(dbPath));
-    db.exec("PRAGMA busy_timeout = 100");
+    const { loadSqliteCtor } = await import("../../storage/sqlite/runtime.js");
+    const Ctor = await loadSqliteCtor();
+    if (!Ctor) return null;
+    // A live WAL index (the daemon or an indexer holds it) opens fine read-only; a writer's lock is waited out for 100 ms.
+    db = new Ctor(req.dbPath, { readOnly: true, timeout: 100 });
+    db.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 100");
     const out: ExistingCode = { files: [], symbols: [] };
+    const fileTerms = req.terms.stem.length > 0 ? req.terms.stem : req.terms.folder;
     if (fileTerms.length > 0) {
-      // Most matching words first: with only a length order, short paths holding one common word fill the cap.
+      // Most matching words first, and tests/declarations/vendored code out in SQL: neither a length order nor a
+      // post-filter may let rows that will be discarded fill the cap.
       const hit = fileTerms.map(() => "(path LIKE ?)").join(" + ");
       const patterns = fileTerms.map((t) => `%${t}%`);
       const rows = db.prepare(
-        `SELECT path FROM files WHERE ${fileTerms.map(() => "path LIKE ?").join(" OR ")} ORDER BY ${hit} DESC, length(path) LIMIT 300`,
+        `SELECT path FROM files WHERE (${fileTerms.map(() => "path LIKE ?").join(" OR ")}) ` +
+        "AND path NOT LIKE '%.test.%' AND path NOT LIKE '%.spec.%' AND path NOT LIKE '%.d.ts' " +
+        "AND path NOT LIKE '%node_modules/%' AND path NOT LIKE '%dist/%' AND path NOT LIKE '%/__tests__/%' " +
+        `ORDER BY ${hit} DESC, length(path) LIMIT 600`,
       ).all(...patterns, ...patterns) as Array<{ path: string }>;
-      out.files = rankExistingFiles(rows.map((r) => r.path), terms, selfPath);
+      out.files = rankExistingFiles(rows.map((r) => r.path), req.terms, req.selfPath);
     }
-    if (stemWords.length > 0 && Date.now() - started < budgetMs) {
+    if (req.stemWords.length > 0 && Date.now() - started < req.budgetMs) {
       // Two steps on purpose: `name LIKE` alone scans the narrow `idx_symbols_name` (58 ms warm, 0.55 s cold on a
       // 596k-symbol index), while adding `kind`/`file` conditions makes SQLite walk the whole table (4.7 s cold).
       // Test-case and suite names hold spaces, identifiers never do, so `NOT LIKE '% %'` keeps them out of the cap.
       const ids = db.prepare(
-        `SELECT rowid AS id FROM symbols WHERE ${stemWords.map(() => "name LIKE ?").join(" AND ")} AND name NOT LIKE '% %' ` +
-        "ORDER BY length(name) LIMIT 150",
-      ).all(...stemWords.map((w) => `%${w}%`)) as Array<{ id: number }>;
-      if (ids.length > 0 && Date.now() - started < budgetMs) {
+        `SELECT rowid AS id FROM symbols WHERE ${req.stemWords.map(() => "name LIKE ?").join(" AND ")} AND name NOT LIKE '% %' ` +
+        "ORDER BY length(name) LIMIT 500",
+      ).all(...req.stemWords.map((w) => `%${w}%`)) as Array<{ id: number }>;
+      if (ids.length > 0 && Date.now() - started < req.budgetMs) {
         const rows = db.prepare(
-          `SELECT name, kind, file, start_line FROM symbols WHERE rowid IN (${ids.map(() => "?").join(",")})`,
-        ).all(...ids.map((r) => r.id)) as unknown as SymbolRow[];
-        out.symbols = rankExistingSymbols(rows, stemWords);
+          `SELECT name, kind, file, start_line FROM symbols WHERE rowid IN (${ids.map(() => "?").join(",")}) ` +
+          `AND kind IN (${HINT_SYMBOL_KINDS.map(() => "?").join(",")}) AND file NOT LIKE '%.test.%' AND file NOT LIKE '%.spec.%'`,
+        ).all(...ids.map((r) => r.id), ...HINT_SYMBOL_KINDS) as unknown as SymbolRow[];
+        out.symbols = rankExistingSymbols(rows, req.stemWords);
       }
     }
     return out;
@@ -381,18 +384,91 @@ export async function lookupExistingCode(filePath: string, budgetMs = HINT_BUDGE
   }
 }
 
-/** `lookupExistingCode` under a hard clock that also covers the lazy import; never rejects. */
+/** Runs `exportName(request)` of `moduleUrl` and prints its JSON result: the child's whole program. */
+const CHILD_BOOT =
+  "import(process.argv[1]).then((m) => m[process.argv[2]](JSON.parse(process.argv[3])))" +
+  ".then((v) => process.stdout.write(JSON.stringify({ v })), () => process.stdout.write(JSON.stringify({ v: null })));";
+
+/**
+ * Call an async export of a module in a throw-away child process and give up after `timeoutMs`: the child is then
+ * SIGKILLed and the answer is `null`. A child, not a worker thread, because `node:sqlite` is synchronous: a query
+ * on a cold 1 GB index cannot be interrupted from inside, `worker.terminate()` does not stop a thread that is in
+ * native code, and `process.exit()` joins its workers — measured, a 55 s query held the exit for 55 s after the
+ * timer fired. Never rejects.
+ */
+export function runInChild<T>(moduleUrl: string, exportName: string, request: unknown, timeoutMs: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn> | undefined;
+    let out = "";
+    let timer: NodeJS.Timeout | undefined;
+    const done = (value: T | null) => {
+      clearTimeout(timer);
+      try {
+        child?.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      resolve(value);
+    };
+    try {
+      timer = setTimeout(() => done(null), timeoutMs);
+      child = spawn(process.execPath, ["-e", CHILD_BOOT, moduleUrl, exportName, JSON.stringify(request)], {
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      child.stdout?.on("data", (chunk: Buffer) => {
+        out += chunk.toString("utf-8");
+      });
+      child.once("error", () => done(null));
+      child.once("close", () => {
+        try {
+          done((JSON.parse(out) as { v: T | null }).v);
+        } catch {
+          done(null);
+        }
+      });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+/** `HINT_BUDGET_MS`, overridable for a forced-timeout check (`CODESIFT_HINT_BUDGET_MS=1`). */
+function hintBudgetMs(): number {
+  const n = Number(process.env["CODESIFT_HINT_BUDGET_MS"]);
+  return Number.isFinite(n) && n > 0 ? n : HINT_BUDGET_MS;
+}
+
+/**
+ * The existing code that matches the new file's name, or `null` (no repo, no index, nothing to match, any failure,
+ * budget spent). The registry and the index path are resolved here, cheaply; the queries run in a child process
+ * so the budget is real. Under tsx/vitest (this module is a `.ts` file, which a plain `node` child cannot import)
+ * they run in-process.
+ */
+export async function lookupExistingCode(filePath: string, budgetMs = hintBudgetMs()): Promise<ExistingCode | null> {
+  const repo = findIndexedRepo(filePath);
+  if (!repo) return null;
+  const dbPath = sqlitePathFor(repo.indexPath);
+  if (!existsSync(dbPath)) return null;
+  const terms = nameTerms(filePath);
+  const stemWords = words(basename(filePath).replace(/\.[^.]+$/, "")).filter((w) => w.length >= 3 && !GENERIC_WORDS.has(w));
+  if (terms.stem.length + terms.folder.length === 0 && stemWords.length === 0) return null;
+  const request: LookupRequest = {
+    dbPath,
+    selfPath: relative(repo.root, filePath).split(sep).join("/"),
+    terms,
+    stemWords,
+    budgetMs,
+  };
+  if (import.meta.url.endsWith(".ts")) return queryExistingCode(request);
+  return runInChild<ExistingCode>(import.meta.url, "queryExistingCode", request, budgetMs);
+}
+
+/** The deny message's block; never throws or blocks past the budget. */
 async function existingCodeHint(filePath: string): Promise<string | null> {
-  let timer: NodeJS.Timeout | undefined;
   try {
-    const timeout = new Promise<null>((resolve) => {
-      timer = setTimeout(() => resolve(null), HINT_BUDGET_MS + 100);
-    });
-    return formatExistingCode(await Promise.race([lookupExistingCode(filePath), timeout]));
+    return formatExistingCode(await lookupExistingCode(filePath));
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

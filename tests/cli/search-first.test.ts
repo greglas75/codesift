@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
-import { loadSqliteCtor } from "../../src/storage/sqlite/runtime.js";
+import { closeAllIndexDbs, openIndexDb } from "../../src/storage/sqlite/connection.js";
+import { resetIndexBackendForTesting, saveIndex } from "../../src/storage/index-store.js";
+import type { CodeIndex } from "../../src/types.js";
+import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
 
 import {
   formatExistingCode,
@@ -15,6 +19,7 @@ import {
   rankExistingSymbols,
   readLinesBackward,
   relevantTerms,
+  runInChild,
   searchedSinceLastPrompt,
 } from "../../src/cli/hooks/search-first.js";
 
@@ -194,6 +199,10 @@ describe("rankExistingFiles", () => {
     expect(rank(["src/any-format.ts", "src/format-label.ts"], stem)).toEqual(["src/format-label.ts"]);
   });
 
+  it("returns nothing when there is no word to match (it would list arbitrary files)", () => {
+    expect(rank(["src/a.ts", "src/b.ts"], { stem: [], folder: [] })).toEqual([]);
+  });
+
   it("falls back to folder words when the stem is all generic words, and shows at most 3", () => {
     const paths = ["a/percent/1.ts", "a/percent/2.ts", "a/percent/3.ts", "a/percent/4.ts"];
     expect(rank(paths, { stem: [], folder: ["percent"] })).toHaveLength(3);
@@ -221,6 +230,10 @@ describe("rankExistingSymbols", () => {
     expect(rankExistingSymbols(rows, words).map((r) => r.name)).toEqual(expectedNames);
   });
 
+  it("matches upper-case stem words too (the contract is case-insensitive)", () => {
+    expect(rankExistingSymbols([sym("formatPercent")], ["Format", "PERCENT"]).map((r) => r.name)).toEqual(["formatPercent"]);
+  });
+
   it("returns nothing for an empty word list (it would match every symbol) and caps at 3", () => {
     expect(rankExistingSymbols([sym("a")], [])).toEqual([]);
     expect(rankExistingSymbols(["A", "B", "C", "D"].map((n) => sym(`formatPercent${n}`)), words)).toHaveLength(3);
@@ -244,6 +257,40 @@ describe("formatExistingCode", () => {
       "  file   src/utils/formatPercent.ts\n" +
       "  symbol formatPercent (function) — src/utils/formatPercent.ts:12",
     );
+  });
+});
+
+describe("runInChild", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "codesift-child-"));
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+  const module = (body: string) => {
+    const path = join(dir, "m.mjs");
+    writeFileSync(path, body);
+    return pathToFileURL(path).href;
+  };
+
+  it("returns the export's result, passing the request through as JSON", async () => {
+    const url = module("export const echo = async (r) => ({ got: r.n + 1 });");
+    await expect(runInChild(url, "echo", { n: 41 }, 5000)).resolves.toEqual({ got: 42 });
+  });
+
+  // node:sqlite is synchronous: without killing the process a cold query overruns the hook's budget and nothing can stop it
+  it("gives up on time with null when the call never returns, and kills it", async () => {
+    const url = module("export const spin = async () => { while (true) {} };");
+    const started = Date.now();
+    await expect(runInChild(url, "spin", {}, 300)).resolves.toBeNull();
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it.each([
+    ["an export that throws", "export const f = async () => { throw new Error('x'); };", "f"],
+    ["an export that does not exist", "export const f = async () => 1;", "missing"],
+    ["a module that fails to load", "export const f = ;", "f"],
+  ])("answers null for %s — a broken lookup must mean no hints, never a failure", async (_label, body, name) => {
+    await expect(runInChild(module(body), name, {}, 5000)).resolves.toBeNull();
   });
 });
 
@@ -369,39 +416,62 @@ describe("handlePrecheckWrite", () => {
     expect(denied()).toBe(false);
   });
   describe("existing-code hints from the repo's SQLite index", () => {
+    const itSqlite = HAS_NODE_SQLITE ? it : it.skip;
     const newFile = () => join(repo, "src", "format-percent.ts");
     const deniedMessage = async () => {
       await run(newFile(), transcript(prompt("add a percent formatter")));
       return stdout;
     };
-    const writeDb = async (rows: { files: string[]; symbols: Array<[string, string, string, number]> }) => {
-      const Ctor = await loadSqliteCtor();
-      if (!Ctor) return false; // no node:sqlite on this runtime: the hook has nothing to read either
-      const db = new Ctor(join(dataDir, "repo.index.db"));
-      db.exec("CREATE TABLE files (path TEXT PRIMARY KEY); CREATE TABLE symbols (name TEXT, kind TEXT, file TEXT, start_line INTEGER);");
-      for (const f of rows.files) db.prepare("INSERT INTO files (path) VALUES (?)").run(f);
-      for (const s of rows.symbols) db.prepare("INSERT INTO symbols (name, kind, file, start_line) VALUES (?, ?, ?, ?)").run(...s);
-      db.close();
-      return true;
+    // Written by the storage layer's own writer, so a change to the schema or the path convention breaks these tests.
+    const writeIndex = async (symbols: Array<[name: string, file: string, line: number, kind?: "function" | "variable"]>, files: string[] = []) => {
+      process.env["CODESIFT_INDEX_BACKEND"] = "sqlite";
+      resetIndexBackendForTesting();
+      const paths = new Set([...files, ...symbols.map((x) => x[1])]);
+      const index: CodeIndex = {
+        repo: "local/repo", root: repo, created_at: 1, updated_at: 2,
+        symbols: symbols.map(([name, file, line, kind]) => ({
+          id: `local/repo:${file}:${name}:${line}`, repo: "local/repo", name, kind: kind ?? "function", file, start_line: line, end_line: line + 1,
+        })),
+        files: [...paths].map((path) => ({ path, language: "typescript", symbol_count: 0, last_modified: 1 })),
+        symbol_count: symbols.length, file_count: paths.size,
+      };
+      await saveIndex(join(dataDir, "repo.index.json"), index);
     };
+    afterEach(() => {
+      closeAllIndexDbs();
+      delete process.env["CODESIFT_INDEX_BACKEND"];
+      resetIndexBackendForTesting();
+    });
 
-    it("shows the likely duplicate (file and symbol) in the deny message, without tests", async () => {
-      const seeded = await writeDb({
-        files: ["src/utils/formatPercent.ts", "src/utils/formatPercent.test.ts", "src/unrelated.ts"],
-        symbols: [["formatPercent", "function", "src/utils/formatPercent.ts", 12], ["formatPercent", "function", "src/utils/formatPercent.test.ts", 3]],
-      });
-      if (!seeded) return;
+    itSqlite("shows the likely duplicate (file and symbol) in the deny message, without tests", async () => {
+      await writeIndex(
+        [["formatPercent", "src/utils/formatPercent.ts", 12], ["formatPercent", "src/utils/formatPercent.test.ts", 3], ["formatPercentBag", "src/x.ts", 1, "variable"]],
+        ["src/unrelated.ts"],
+      );
       const out = await deniedMessage();
       expect(denied()).toBe(true);
       expect(out).toContain("Existing code that may already do this:");
       expect(out).toContain("src/utils/formatPercent.ts");
-      expect(out).toContain("formatPercent (function)");
+      expect(out).toContain("formatPercent (function) — src/utils/formatPercent.ts:12");
       expect(out).not.toContain("formatPercent.test.ts");
+      expect(out).not.toContain("formatPercentBag");
       expect(out).not.toContain("unrelated");
     });
 
-    it("sends no block when the index holds nothing similar", async () => {
-      if (!(await writeDb({ files: ["src/unrelated.ts"], symbols: [] }))) return;
+    // The daemon or an indexer holds the index open, mid-transaction: the hook must still read the last committed state.
+    itSqlite("reads an index another connection holds open with a write transaction pending", async () => {
+      await writeIndex([["formatPercent", "src/utils/formatPercent.ts", 12]]);
+      const writer = await openIndexDb(join(dataDir, "repo.index.db"));
+      writer.exec("BEGIN IMMEDIATE");
+      try {
+        expect(await deniedMessage()).toContain("formatPercent (function)");
+      } finally {
+        writer.exec("ROLLBACK");
+      }
+    });
+
+    itSqlite("sends no block when the index holds nothing similar", async () => {
+      await writeIndex([], ["src/unrelated.ts"]);
       expect(await deniedMessage()).not.toContain("Existing code");
       expect(denied()).toBe(true);
     });
