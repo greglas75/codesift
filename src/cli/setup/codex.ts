@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { SetupOptions, SetupResult } from "./types.js";
 import { ensureDir, writeSecretFile } from "./fs.js";
 import { daemonHttpUrl, resolveMcpServerEntry, assertTokenTransportIsSafe } from "./mcp.js";
-import { hasCodesiftHook, loadHooksSection, saveHooksSection } from "./hooks.js";
+import { hasCodesiftHook, loadHooksSection, saveHooksSection, type HookEntry } from "./hooks.js";
 
 export function stripCodesiftToolApprovalOverrides(
   content: string,
@@ -339,18 +339,46 @@ export async function setupCodex(options?: SetupOptions): Promise<SetupResult> {
   return { platform: "codex", config_path: configPath, status: "updated", ...noteFields };
 }
 
+/**
+ * The one CodeSift hook Codex keeps: new source files are created through `apply_patch`, and the search-first gate
+ * (`precheck-write`) is the only hook that sees them. The shell hooks (`precheck-bash` and friends) stay retired —
+ * they raised repeated approval prompts. A short timeout: the gate answers in well under a second or lets the patch through.
+ */
+const CODEX_PRECHECK_WRITE: HookEntry = {
+  matcher: "apply_patch",
+  hooks: [{ type: "command", command: "codesift precheck-write --stdin", timeout: 10 }],
+};
+
+function isPrecheckWriteEntry(entry: HookEntry): boolean {
+  const list = entry.hooks as Array<Record<string, unknown>> | undefined;
+  return entry.matcher === "apply_patch" && Array.isArray(list) && list.length === 1 &&
+    typeof list[0]?.["command"] === "string" && (list[0]["command"] as string).includes("codesift precheck-write");
+}
+
 export async function setupCodexHooks(): Promise<void> {
   const configDir = process.env["CODEX_HOME"] ?? join(homedir(), ".codex");
   const hooksPath = join(configDir, "hooks.json");
   await ensureDir(configDir);
   const { root, hooks, original } = await loadHooksSection(hooksPath);
 
+  // Drop every legacy CodeSift hook except the current gate, which keeps its place: Codex trusts a hook by
+  // `hooks.json:<event>:<group index>`, so moving the entry on each run would un-trust it each time.
+  let kept = false;
   for (const event of Object.keys(hooks)) {
     const entries = hooks[event];
     if (!Array.isArray(entries)) continue;
-    const kept = entries.filter((entry) => !hasCodesiftHook([entry]));
-    if (kept.length === 0) delete hooks[event];
-    else hooks[event] = kept;
+    const surviving = entries.filter((entry) => {
+      if (!hasCodesiftHook([entry])) return true;
+      if (event !== "PreToolUse" || kept || !isPrecheckWriteEntry(entry)) return false;
+      kept = true;
+      return true;
+    });
+    if (surviving.length === 0) delete hooks[event];
+    else hooks[event] = surviving;
+  }
+  if (!kept) {
+    if (!Array.isArray(hooks["PreToolUse"])) hooks["PreToolUse"] = [];
+    hooks["PreToolUse"].push(CODEX_PRECHECK_WRITE);
   }
 
   await saveHooksSection(hooksPath, root, original);
