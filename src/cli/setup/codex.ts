@@ -362,7 +362,10 @@ export async function setupCodexHooks(): Promise<void> {
   const { root, hooks, original } = await loadHooksSection(hooksPath);
 
   // Drop every legacy CodeSift hook except the current gate, which keeps its place: Codex trusts a hook by
-  // `hooks.json:<event>:<group index>`, so moving the entry on each run would un-trust it each time.
+  // `hooks.json:<event>:<group index>`, so moving the entry on each run would un-trust it each time. Removing a
+  // legacy entry that sits BEFORE the gate does shift the gate's index once (the owner trusts it again after that
+  // migration); entries after it, and every re-run, leave it where it is. No in-place replacement could avoid this:
+  // the old entry's trusted hash belongs to the old command.
   let kept = false;
   for (const event of Object.keys(hooks)) {
     const entries = hooks[event];

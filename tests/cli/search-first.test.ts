@@ -24,6 +24,7 @@ import {
   relevantTerms,
   runInChild,
   searchedSinceLastPrompt,
+  searchedSinceLastPromptEach,
 } from "../../src/cli/hooks/search-first.js";
 
 const hookEnv = { serverRunning: true };
@@ -168,6 +169,25 @@ describe("searchedSinceLastPrompt over a Codex rollout", () => {
   });
 });
 
+describe("searchedSinceLastPromptEach", () => {
+  it("answers every term set from ONE pass over the transcript", () => {
+    // Bug caught: a patch adding N files re-read and re-parsed the whole rollout N times. A generator cannot be replayed.
+    const newest = [codexShell("rg -n formatPercent src"), codexPrompt("add both"), codexShell("rg parseDuration .")];
+    let pulled = 0;
+    function* once() {
+      for (const l of newest) { pulled++; yield l; }
+    }
+    const verdicts = searchedSinceLastPromptEach(once(), [["format", "percent"], ["parse", "duration"]]);
+    expect(verdicts).toEqual([true, false]);
+    expect(pulled).toBe(2); // stopped at the prompt: nothing resolved after it
+  });
+
+  it("matches the single-set answers on a Claude transcript", () => {
+    const newest = [toolUse("Grep", { pattern: "formatPercent" }), prompt("go")];
+    expect(searchedSinceLastPromptEach(newest, [["format"], ["parse"], []])).toEqual([true, false, true]);
+  });
+});
+
 describe("codexEvent", () => {
   it("reads the argv of a captured CommandExecution as the shell script it ran", () => {
     const [line] = fixtureLines("rollout-command-execution.jsonl");
@@ -177,6 +197,13 @@ describe("codexEvent", () => {
   it.each([
     ["a command without a shell wrapper", ["rg", "formatPercent", "."], "rg formatPercent ."],
     ["sh -c", ["sh", "-c", "grep -rn formatPercent ."], "grep -rn formatPercent ."],
+    ["an absolute zsh path with -lc", ["/usr/bin/zsh", "-lc", "rg formatPercent ."], "rg formatPercent ."],
+    // Bug caught: only argv[1] was looked at, so split flags kept the whole argv as the "command".
+    ["split flags -l -c", ["/bin/bash", "-l", "-c", "rg formatPercent ."], "rg formatPercent ."],
+    // Bug caught: any `-c` was unwrapped, so `python -c "<code>"` passed its code off as a shell script
+    // (a `rg` inside the code would then count as a lookup).
+    ["python -c is not a shell script", ["python3", "-c", "print('rg formatPercent ')"], "python3 -c print('rg formatPercent ')"],
+    ["a program whose name only ends in sh", ["/opt/bin/fish", "-c", "rg formatPercent ."], "/opt/bin/fish -c rg formatPercent ."],
   ])("joins or unwraps argv for %s", (_label, argv, script) => {
     const event = codexEvent(JSON.parse(codexItem({ type: "CommandExecution", command: argv })));
     expect(event).toEqual({ kind: "tool", name: "Bash", input: { command: script } });
@@ -223,9 +250,15 @@ describe("parseWriteHookInput", () => {
     });
   });
 
-  it("finds a patch that a build puts under `arguments` as a plain field, not inside a JSON string", () => {
+  it("finds a patch that a build puts under `arguments` as a plain field", () => {
     const plain = JSON.stringify({ cwd: "/w", arguments: { input: "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch" } });
     expect(parseWriteHookInput(plain).patchFiles).toEqual([resolve("/w", "a.ts")]);
+  });
+
+  it.each(["arguments", "tool_input"])("finds a patch when `%s` is a JSON-encoded string", (field) => {
+    // Bug caught: in a JSON string the patch's newlines are escaped, so `^*** Add File:` never matched and the file went unchecked.
+    const encoded = JSON.stringify({ command: "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch" });
+    expect(parseWriteHookInput(JSON.stringify({ cwd: "/w", [field]: encoded })).patchFiles).toEqual([resolve("/w", "a.ts")]);
   });
 
   it("keeps a Claude Write as before: file_path, no patch files", () => {

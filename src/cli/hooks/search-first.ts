@@ -158,15 +158,33 @@ export function isHumanPrompt(entry: TranscriptEntry): boolean {
   return Array.isArray(content) && !content.some((b) => (b as { type?: unknown })?.type === "tool_result");
 }
 
-function entrySearched(entry: TranscriptEntry, terms: readonly string[]): boolean {
-  if (entry.type !== "assistant") return false;
+/** The lookups (tool_use blocks that searched the repo) of a Claude assistant record. */
+function searchesIn(entry: TranscriptEntry): Array<{ name: string; input: unknown }> {
+  if (entry.type !== "assistant") return [];
   const content = entry.message?.content;
-  if (!Array.isArray(content)) return false;
-  return content.some((block) => {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ name: string; input: unknown }> = [];
+  for (const block of content) {
     const b = block as { type?: unknown; name?: unknown; input?: unknown };
-    return b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input) &&
-      lookupNames(b.name, b.input, terms);
-  });
+    if (b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input)) out.push({ name: b.name, input: b.input });
+  }
+  return out;
+}
+
+/**
+ * The script of `["/bin/bash", "-lc", "<script>"]` (also `-l -c`, `zsh`, `sh`): the argument after the first `-…c`
+ * flag, only when argv[0] is a shell. Any other program (`python -c`, `node -c`) keeps its whole argv as the command.
+ */
+function shellScript(argv: string[]): string {
+  const shell = /^(?:.*[\\/])?(?:bash|sh|zsh)$/.test(argv[0] ?? "");
+  if (shell) {
+    for (let i = 1; i < argv.length - 1; i++) {
+      const arg = argv[i] as string;
+      if (!arg.startsWith("-")) break;
+      if (/^-\w*c$/.test(arg)) return argv[i + 1] as string;
+    }
+  }
+  return argv.join(" ");
 }
 
 /**
@@ -185,8 +203,7 @@ export function codexEvent(entry: TranscriptEntry): CodexEvent | null {
   }
   const argv = item["command"];
   if (item["type"] === "CommandExecution" && Array.isArray(argv) && argv.every((a) => typeof a === "string")) {
-    const script = argv.length >= 3 && /^-\w*c$/.test(argv[1] as string) ? (argv[2] as string) : argv.join(" ");
-    return { kind: "tool", name: "Bash", input: { command: script } };
+    return { kind: "tool", name: "Bash", input: { command: shellScript(argv as string[]) } };
   }
   return null;
 }
@@ -195,12 +212,13 @@ export function codexEvent(entry: TranscriptEntry): CodexEvent | null {
 const TRANSCRIPT_MARKERS = ['"type":"user"', '"type":"assistant"', '"type":"UserMessage"', '"type":"McpToolCall"', '"type":"CommandExecution"'];
 
 /**
- * Walk transcript lines from the newest: a search naming one of `terms` before
- * reaching the latest human prompt → true; the prompt first → false. `null` =
- * could not tell. No `terms` (the default): any search counts. Reads Claude Code
- * JSONL and Codex rollouts alike.
+ * Walk transcript lines from the newest ONCE for several term sets (one per new file): a search naming one of a set's
+ * terms before the latest human prompt → true for it; the prompt first → false; `null` = could not tell. No terms: any
+ * search counts. Reads Claude Code JSONL and Codex rollouts alike.
  */
-export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, terms: readonly string[] = []): boolean | null {
+export function searchedSinceLastPromptEach(linesNewestFirst: Iterable<string>, termSets: ReadonlyArray<readonly string[]>): Array<boolean | null> {
+  const result: Array<boolean | null> = termSets.map(() => null);
+  let open = termSets.map((_, i) => i);
   for (const line of linesNewestFirst) {
     // Cheap filters first: most lines are attachments, api records and huge tool results. A tool result
     // is neither a lookup nor a prompt; the unescaped marker cannot occur inside prompt text (JSON escapes it).
@@ -213,15 +231,34 @@ export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, term
       continue;
     }
     const codex = codexEvent(entry);
+    let searches: Array<{ name: string; input: unknown }>;
+    let prompt: boolean;
     if (codex) {
-      if (codex.kind === "prompt") return false;
-      if (isSearchToolUse(codex.name, codex.input) && lookupNames(codex.name, codex.input, terms)) return true;
-      continue;
+      prompt = codex.kind === "prompt";
+      searches = codex.kind === "tool" && isSearchToolUse(codex.name, codex.input) ? [codex] : [];
+    } else {
+      searches = searchesIn(entry);
+      prompt = searches.length === 0 && isHumanPrompt(entry);
     }
-    if (entrySearched(entry, terms)) return true;
-    if (isHumanPrompt(entry)) return false;
+    open = open.filter((i) => {
+      if (searches.some((q) => lookupNames(q.name, q.input, termSets[i] as readonly string[]))) {
+        result[i] = true;
+        return false;
+      }
+      if (prompt) {
+        result[i] = false;
+        return false;
+      }
+      return true;
+    });
+    if (open.length === 0) break; // every file answered: do not read further back
   }
-  return null;
+  return result;
+}
+
+/** `searchedSinceLastPromptEach` for one file. */
+export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, terms: readonly string[] = []): boolean | null {
+  return searchedSinceLastPromptEach(linesNewestFirst, [terms])[0] ?? null;
 }
 
 /** Lines of a JSONL file, newest first, read in chunks from the end. Stops at `maxBytes`. */
@@ -594,6 +631,16 @@ export function addedFilesFromPatch(patch: string, cwd: string | null): string[]
   return out;
 }
 
+/** A payload field some builds send as a JSON-encoded string (`"{\"command\":\"*** Begin Patch…\"}"`). */
+function decoded(value: unknown): unknown {
+  if (typeof value !== "string" || !value.trimStart().startsWith("{")) return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
 export function parseWriteHookInput(raw: string): WriteHookInput {
   const empty: WriteHookInput = { filePath: null, patchFiles: [], transcriptPath: null, agentId: null };
   let parsed: unknown;
@@ -604,14 +651,13 @@ export function parseWriteHookInput(raw: string): WriteHookInput {
   }
   if (!parsed || typeof parsed !== "object") return empty;
   const obj = parsed as Record<string, unknown>;
-  const toolInput = obj["tool_input"] && typeof obj["tool_input"] === "object"
-    ? (obj["tool_input"] as Record<string, unknown>)
-    : {};
+  const input = decoded(obj["tool_input"]);
+  const toolInput = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
   const filePath = str(toolInput["file_path"]);
   const patchFiles = filePath
     ? []
-    : [...new Set(patchTexts([obj["tool_input"], obj["arguments"]]).flatMap((p) => addedFilesFromPatch(p, str(obj["cwd"]))))];
+    : [...new Set(patchTexts([input, decoded(obj["arguments"])]).flatMap((p) => addedFilesFromPatch(p, str(obj["cwd"]))))];
   return { filePath, patchFiles, transcriptPath: str(obj["transcript_path"]), agentId: str(obj["agent_id"]) };
 }
 
@@ -626,7 +672,9 @@ export async function handlePrecheckWrite(): Promise<void> {
     // A Codex thread's rollout is its own (subagents get theirs): only Claude keeps subagent transcripts beside the session's.
     const transcript = filePath ? transcriptFor(transcriptPath, agentId) : transcriptPath;
     if (!transcript || !existsSync(transcript)) return process.exit(0);
-    const unsearched = created.filter((f) => searchedSinceLastPrompt(readLinesBackward(transcript), relevantTerms(f)) === false);
+    // One pass over the rollout for every new file of the patch.
+    const verdicts = searchedSinceLastPromptEach(readLinesBackward(transcript), created.map(relevantTerms));
+    const unsearched = created.filter((_, i) => verdicts[i] === false);
     const [first, ...others] = unsearched;
     if (!first) return process.exit(0);
     const reason = denyReason(first, isCodesiftServerRunning(), relevantTerms(first), await existingCodeHint(first));

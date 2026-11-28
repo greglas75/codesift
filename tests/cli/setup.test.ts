@@ -1339,6 +1339,23 @@ describe("setup", () => {
       expect((await readHooks()).PreToolUse).toEqual([precheckEntry, { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] }]);
     });
 
+    it("leaves the gate's index alone when legacy entries sit after it, and shifts it once when they sit before it", async () => {
+      // Codex trusts a hook as `hooks.json:pre_tool_use:<index>`. Entries after the gate may go without moving it;
+      // an entry before it cannot go without moving it — documented in setupCodexHooks, so the owner re-trusts once.
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      const mine = { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] };
+      const legacy = { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }] };
+      await writeFile(join(configDir, "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [mine, precheckEntry, legacy] } }), "utf-8");
+
+      await setupCodexHooks();
+      expect((await readHooks()).PreToolUse).toEqual([mine, precheckEntry]);
+
+      await writeFile(join(configDir, "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [legacy, mine, precheckEntry] } }), "utf-8");
+      await setupCodexHooks();
+      expect((await readHooks()).PreToolUse).toEqual([mine, precheckEntry]);
+    });
+
     it("removes legacy CodeSift shell hooks but installs the gate", async () => {
       const configDir = join(tempHome, ".codex");
       await mkdir(configDir, { recursive: true });
