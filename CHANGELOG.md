@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.26.7] — 2026-11-29
+
+Codex agents now get the search-first gate too.
+
+### Added
+
+- **`precheck-write` covers Codex `apply_patch`.** Every `*** Add File:` in the patch is checked against
+  the lookups in the Codex rollout (CodeSift MCP calls and shell `rg`/`grep` since the last user message);
+  the deny is the standard PreToolUse `permissionDecision: "deny"`, which Codex shows to the agent.
+  `codesift setup codex` installs the `apply_patch` entry at a stable index (Codex trusts hooks by index;
+  trust a new hook once in the TUI `/hooks`). Shell hooks stay retired. (#119)
+
 ## [0.26.6] — 2026-11-28
 
 The search-first deny now shows the code that probably already does the job.
