@@ -538,14 +538,18 @@ Env vars:
 
   "precheck-write": `codesift precheck-write
 
-PreToolUse hook handler for the Write tool — the search-first gate.
+PreToolUse hook handler for the Write tool (Claude Code) and apply_patch (Codex)
+— the search-first gate.
 Denies creating a NEW production source file inside an indexed repo until the
 agent has looked up existing code since the last human prompt (or since its
 brief, in a subagent). Any repo search counts: CodeSift discovery tools
 (search_symbols, semantic_search, find_clones, ...), Grep/Glob, grep/rg in Bash,
 an Explore agent. Edits, tests, .d.ts and generated paths are never gated.
+A Codex patch is gated per "*** Add File:" and judged on the Codex rollout.
 Fails open when the transcript cannot be read. Installed via:
   codesift setup claude --hooks
+  codesift setup codex --hooks   (apply_patch entry in ~/.codex/hooks.json;
+                                  Codex asks you to trust a new hook once)
 
 Env vars:
   CODESIFT_SEARCH_FIRST=0   turn the gate off`,

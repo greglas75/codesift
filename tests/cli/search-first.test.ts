@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { closeAllIndexDbs, openIndexDb } from "../../src/storage/sqlite/connection.js";
@@ -9,18 +9,22 @@ import type { CodeIndex } from "../../src/types.js";
 import { HAS_NODE_SQLITE } from "../helpers/node-sqlite.js";
 
 import {
+  addedFilesFromPatch,
+  codexEvent,
   formatExistingCode,
   handlePrecheckWrite,
   isGatedNewFile,
   isHumanPrompt,
   isSearchToolUse,
   lookupNames,
+  parseWriteHookInput,
   rankExistingFiles,
   rankExistingSymbols,
   readLinesBackward,
   relevantTerms,
   runInChild,
   searchedSinceLastPrompt,
+  searchedSinceLastPromptEach,
 } from "../../src/cli/hooks/search-first.js";
 
 const hookEnv = { serverRunning: true };
@@ -36,6 +40,19 @@ const toolUse = (name: string, input: Record<string, unknown> = {}) =>
   JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name, input }] } });
 const toolResult = () =>
   JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "ok" }] } });
+
+// Codex rollout lines, shaped as Codex 0.172 writes them (tests/fixtures/codex/*: captured, then anonymised).
+const FIXTURES = join(import.meta.dirname, "..", "fixtures", "codex");
+const fixtureLines = (name: string) => readFileSync(join(FIXTURES, name), "utf-8").split("\n").filter(Boolean);
+const codexItem = (item: Record<string, unknown>) =>
+  JSON.stringify({ timestamp: "2026-11-28T17:00:00.000Z", ordinal: 1, type: "event_msg", payload: { type: "item_completed", thread_id: "t", turn_id: "u", item } });
+const codexPrompt = (text: string) => codexItem({ type: "UserMessage", id: "m", content: [{ type: "text", text, text_elements: [] }] });
+const codexMcp = (server: string, tool: string, args: Record<string, unknown>) =>
+  codexItem({ type: "McpToolCall", id: "c", server, tool, arguments: args, status: "completed", result: { content: [] } });
+const codexShell = (script: string) =>
+  codexItem({ type: "CommandExecution", id: "e", command: ["/bin/bash", "-lc", script], status: "completed", aggregated_output: "" });
+// The JS of an `exec` script is recorded too, before its calls finish: not a lookup by itself.
+const codexNoise = JSON.stringify({ type: "response_item", payload: { type: "custom_tool_call", name: "exec", input: "text(await tools.exec_command({cmd:\"rg formatPercent .\"}))" } });
 
 describe("isSearchToolUse", () => {
   it.each([
@@ -106,6 +123,147 @@ describe("searchedSinceLastPrompt", () => {
 
   it("is null when the transcript holds no prompt and no lookup", () => {
     expect(searchedSinceLastPrompt(newestFirst(toolUse("Read"), toolResult(), "not json"))).toBeNull();
+  });
+});
+
+describe("searchedSinceLastPrompt over a Codex rollout", () => {
+  const newestFirst = (...lines: string[]) => [...lines].reverse();
+
+  it("unlocks on a CodeSift MCP call that names the file, after the prompt", () => {
+    const lines = newestFirst(codexPrompt("add it"), codexMcp("codesift", "search_symbols", { query: "formatPercent" }));
+    expect(searchedSinceLastPrompt(lines, ["format", "percent"])).toBe(true);
+  });
+
+  it("unlocks on a shell rg that names the file", () => {
+    // Bug caught: a Codex rollout has no `tool_use` blocks, so every rg/grep looked like no lookup at all.
+    const lines = newestFirst(codexPrompt("add it"), codexShell("cd apps/web && rg -n formatPercent src"));
+    expect(searchedSinceLastPrompt(lines, ["format", "percent"])).toBe(true);
+  });
+
+  it("opens a new window at a UserMessage: a lookup before it does not count", () => {
+    // Bug caught: without the prompt boundary one early search would unlock every later file of the session.
+    const lines = newestFirst(codexPrompt("first"), codexShell("rg formatPercent ."), codexPrompt("second"), codexShell("ls"));
+    expect(searchedSinceLastPrompt(lines, ["format", "percent"])).toBe(false);
+  });
+
+  it("does not count a search for something else, a non-CodeSift MCP server, or a command that is no lookup", () => {
+    const lines = newestFirst(
+      codexPrompt("go"),
+      codexMcp("other", "search_symbols", { query: "formatPercent" }),
+      codexMcp("codesift", "index_folder", { path: "/x/formatPercent" }),
+      codexShell("npx vitest run formatPercent.test.ts"),
+      codexShell("rg useQuery apps/"),
+    );
+    expect(searchedSinceLastPrompt(lines, ["format", "percent"])).toBe(false);
+  });
+
+  it("ignores the JS of an exec script and the other Codex records (only completed items count)", () => {
+    expect(searchedSinceLastPrompt(newestFirst(codexPrompt("go"), codexNoise), ["format", "percent"])).toBe(false);
+  });
+
+  it("reads the captured rollout: the MCP search after the prompt unlocks the file, its absence does not", () => {
+    const lines = fixtureLines("rollout-mcp-search-before-patch.jsonl");
+    expect(searchedSinceLastPrompt([...lines].reverse(), ["format", "percent"])).toBe(true);
+    const withoutSearch = lines.filter((l) => !l.includes('"type":"McpToolCall"'));
+    expect(searchedSinceLastPrompt(withoutSearch.reverse(), ["format", "percent"])).toBe(false);
+  });
+});
+
+describe("searchedSinceLastPromptEach", () => {
+  it("answers every term set from ONE pass over the transcript", () => {
+    // Bug caught: a patch adding N files re-read and re-parsed the whole rollout N times. A generator cannot be replayed.
+    const newest = [codexShell("rg -n formatPercent src"), codexPrompt("add both"), codexShell("rg parseDuration .")];
+    let pulled = 0;
+    function* once() {
+      for (const l of newest) { pulled++; yield l; }
+    }
+    const verdicts = searchedSinceLastPromptEach(once(), [["format", "percent"], ["parse", "duration"]]);
+    expect(verdicts).toEqual([true, false]);
+    expect(pulled).toBe(2); // stopped at the prompt: nothing resolved after it
+  });
+
+  it("matches the single-set answers on a Claude transcript", () => {
+    const newest = [toolUse("Grep", { pattern: "formatPercent" }), prompt("go")];
+    expect(searchedSinceLastPromptEach(newest, [["format"], ["parse"], []])).toEqual([true, false, true]);
+  });
+});
+
+describe("codexEvent", () => {
+  it("reads the argv of a captured CommandExecution as the shell script it ran", () => {
+    const [line] = fixtureLines("rollout-command-execution.jsonl");
+    expect(codexEvent(JSON.parse(line as string))).toEqual({ kind: "tool", name: "Bash", input: { command: "rg formatPercent ." } });
+  });
+
+  it.each([
+    ["a command without a shell wrapper", ["rg", "formatPercent", "."], "rg formatPercent ."],
+    ["sh -c", ["sh", "-c", "grep -rn formatPercent ."], "grep -rn formatPercent ."],
+    ["an absolute zsh path with -lc", ["/usr/bin/zsh", "-lc", "rg formatPercent ."], "rg formatPercent ."],
+    // Bug caught: only argv[1] was looked at, so split flags kept the whole argv as the "command".
+    ["split flags -l -c", ["/bin/bash", "-l", "-c", "rg formatPercent ."], "rg formatPercent ."],
+    // Bug caught: any `-c` was unwrapped, so `python -c "<code>"` passed its code off as a shell script
+    // (a `rg` inside the code would then count as a lookup).
+    ["python -c is not a shell script", ["python3", "-c", "print('rg formatPercent ')"], "python3 -c print('rg formatPercent ')"],
+    ["a program whose name only ends in sh", ["/opt/bin/fish", "-c", "rg formatPercent ."], "/opt/bin/fish -c rg formatPercent ."],
+  ])("joins or unwraps argv for %s", (_label, argv, script) => {
+    const event = codexEvent(JSON.parse(codexItem({ type: "CommandExecution", command: argv })));
+    expect(event).toEqual({ kind: "tool", name: "Bash", input: { command: script } });
+  });
+
+  it("is null for an item that is neither a prompt nor a tool call", () => {
+    expect(codexEvent(JSON.parse(codexItem({ type: "AgentMessage", content: [] })))).toBeNull();
+  });
+});
+
+describe("addedFilesFromPatch", () => {
+  const patch = [
+    "*** Begin Patch",
+    "*** Add File: src/format-percent.ts",
+    "+export const formatPercent = 1;",
+    "*** Update File: src/existing.ts",
+    "@@",
+    "-a",
+    "+b",
+    "*** Add File: /abs/other/parse-date.ts",
+    "+export const parseDate = 1;",
+    "*** Delete File: src/old.ts",
+    "*** End Patch",
+  ].join("\n");
+
+  it("lists only Add File sections, resolving relative paths against cwd", () => {
+    // Bug caught: treating Update/Delete as new files would gate every edit; ignoring cwd would test the wrong path.
+    expect(addedFilesFromPatch(patch, "/work/repo")).toEqual([resolve("/work/repo", "src/format-percent.ts"), "/abs/other/parse-date.ts"]);
+  });
+
+  it("copes with CRLF patches", () => {
+    expect(addedFilesFromPatch("*** Begin Patch\r\n*** Add File: a/b.ts\r\n+x\r\n*** End Patch", "/w")).toEqual([resolve("/w", "a/b.ts")]);
+  });
+});
+
+describe("parseWriteHookInput", () => {
+  it("reads the captured Codex apply_patch payload: patch in tool_input.command, rollout as transcript_path", () => {
+    const raw = readFileSync(join(FIXTURES, "pre-tool-use-apply-patch.json"), "utf-8");
+    expect(parseWriteHookInput(raw)).toEqual({
+      filePath: null,
+      patchFiles: [resolve("/work/repo", "src/format-percent.ts")],
+      transcriptPath: expect.stringMatching(/rollout-.*\.jsonl$/),
+      agentId: null,
+    });
+  });
+
+  it("finds a patch that a build puts under `arguments` as a plain field", () => {
+    const plain = JSON.stringify({ cwd: "/w", arguments: { input: "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch" } });
+    expect(parseWriteHookInput(plain).patchFiles).toEqual([resolve("/w", "a.ts")]);
+  });
+
+  it.each(["arguments", "tool_input"])("finds a patch when `%s` is a JSON-encoded string", (field) => {
+    // Bug caught: in a JSON string the patch's newlines are escaped, so `^*** Add File:` never matched and the file went unchecked.
+    const encoded = JSON.stringify({ command: "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch" });
+    expect(parseWriteHookInput(JSON.stringify({ cwd: "/w", [field]: encoded })).patchFiles).toEqual([resolve("/w", "a.ts")]);
+  });
+
+  it("keeps a Claude Write as before: file_path, no patch files", () => {
+    const parsed = parseWriteHookInput(JSON.stringify({ transcript_path: "/t.jsonl", tool_input: { file_path: "/r/a.ts", content: "*** Begin Patch\n*** Add File: b.ts" } }));
+    expect(parsed).toEqual({ filePath: "/r/a.ts", patchFiles: [], transcriptPath: "/t.jsonl", agentId: null });
   });
 });
 
@@ -487,6 +645,79 @@ describe("handlePrecheckWrite", () => {
     await run(join(repo, "src", "a.ts"), transcript(prompt("go")), { agent_id: "missing" });
     expect(denied()).toBe(false);
   });
+  describe("Codex apply_patch", () => {
+    const patchOf = (...files: string[]) =>
+      ["*** Begin Patch", ...files.flatMap((f) => [`*** Add File: ${f}`, "+export const x = 1;"]), "*** End Patch"].join("\n");
+    const rollout = (...lines: string[]) => {
+      const path = join(dataDir, "rollout.jsonl");
+      writeFileSync(path, lines.join("\n") + "\n");
+      return path;
+    };
+    const runPatch = async (patch: string, transcriptPath: string | null) => {
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        hook_event_name: "PreToolUse", tool_name: "apply_patch", cwd: repo, tool_input: { command: patch },
+        transcript_path: transcriptPath,
+      });
+      await handlePrecheckWrite();
+    };
+
+    it("denies a patch that adds a source file nobody looked up, in the format Codex reads", async () => {
+      // Bug caught: Codex has no Write tool, so the gate never fired for Codex agents at all.
+      await runPatch(patchOf("src/format-percent.ts"), rollout(codexPrompt("add a formatter"), codexShell("ls")));
+      expect(denied()).toBe(true);
+      expect(JSON.parse(stdout)).toEqual({
+        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: expect.stringContaining("format-percent.ts") },
+      });
+    });
+
+    it("allows it once the rollout shows a lookup for the file after the prompt", async () => {
+      await runPatch(patchOf("src/format-percent.ts"),
+        rollout(codexPrompt("add it"), codexMcp("codesift", "search_symbols", { query: "formatPercent" })));
+      expect(denied()).toBe(false);
+    });
+
+    it("denies a patch whose lookup was for another file, naming the file that failed", async () => {
+      // Bug caught: one search for the first file must not unlock every other file the same patch adds.
+      await runPatch(patchOf("src/format-percent.ts", "src/parse-duration.ts"),
+        rollout(codexPrompt("add both"), codexShell("rg -n formatPercent src")));
+      expect(denied()).toBe(true);
+      const reason = JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason as string;
+      expect(reason).toContain('"parse-duration.ts"');
+      expect(reason).not.toContain("format-percent");
+    });
+
+    it("lists the other unsearched files of the patch after the first", async () => {
+      await runPatch(patchOf("src/format-percent.ts", "src/parse-duration.ts"), rollout(codexPrompt("add both")));
+      expect(JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason).toContain('Also new in this patch, not looked up yet: "parse-duration.ts"');
+    });
+
+    it.each([
+      ["a patch that only updates a file", "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** End Patch"],
+      ["a patch that only adds a test file", "*** Begin Patch\n*** Add File: src/format-percent.test.ts\n+x\n*** End Patch"],
+      ["a patch that adds a non-code file", "*** Begin Patch\n*** Add File: docs/notes.md\n+x\n*** End Patch"],
+    ])("never gates %s", async (_label, patch) => {
+      await runPatch(patch, rollout(codexPrompt("go")));
+      expect(denied()).toBe(false);
+    });
+
+    it("fails open when Codex sends no transcript path or the rollout is gone", async () => {
+      await runPatch(patchOf("src/format-percent.ts"), null);
+      expect(denied()).toBe(false);
+      await runPatch(patchOf("src/format-percent.ts"), join(dataDir, "missing.jsonl"));
+      expect(denied()).toBe(false);
+    });
+
+    it("ignores an agent_id: a Codex thread's rollout is its own, there is no subagents/ folder to switch to", async () => {
+      // Bug caught: reusing Claude's subagent lookup would fail open ("transcript not found") for every Codex subagent.
+      process.env["HOOK_TOOL_INPUT"] = JSON.stringify({
+        tool_name: "apply_patch", cwd: repo, agent_id: "a1", transcript_path: rollout(codexPrompt("go")),
+        tool_input: { command: patchOf("src/format-percent.ts") },
+      });
+      await handlePrecheckWrite();
+      expect(denied()).toBe(true);
+    });
+  });
+
   describe("existing-code hints from the repo's SQLite index", () => {
     const itSqlite = HAS_NODE_SQLITE ? it : it.skip;
     const indexPath = () => join(dataDir, "repo.index.json");

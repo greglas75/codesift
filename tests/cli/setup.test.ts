@@ -1272,26 +1272,29 @@ describe("setup", () => {
   // -------------------------------------------------------------------------
 
   describe("setupCodexHooks", () => {
-    it("creates hooks.json without CodeSift hooks when none exists", async () => {
+    const precheckEntry = {
+      matcher: "apply_patch",
+      hooks: [{ type: "command", command: "codesift precheck-write --stdin", timeout: 10 }],
+    };
+    const hooksFile = () => join(tempHome, ".codex", "hooks.json");
+    const readHooks = async () => JSON.parse(await readFile(hooksFile(), "utf-8")).hooks;
+
+    it("creates hooks.json with only the apply_patch search-first gate when none exists", async () => {
       await setupCodexHooks();
 
-      const hooksPath = join(tempHome, ".codex", "hooks.json");
-      expect(existsSync(hooksPath)).toBe(true);
-
-      const content = JSON.parse(await readFile(hooksPath, "utf-8"));
-      expect(content.hooks).toEqual({});
+      // Bug caught: Codex creates files through apply_patch, so without this entry the gate never sees them.
+      expect(await readHooks()).toEqual({ PreToolUse: [precheckEntry] });
     });
 
-    it("is idempotent — no duplicates on second run", async () => {
+    it("is idempotent — no duplicates and no rewrite on the second run", async () => {
       await setupCodexHooks();
+      const first = await readFile(hooksFile(), "utf-8");
       await setupCodexHooks();
 
-      const hooksPath = join(tempHome, ".codex", "hooks.json");
-      const content = JSON.parse(await readFile(hooksPath, "utf-8"));
-      expect(content.hooks).toEqual({});
+      expect(await readFile(hooksFile(), "utf-8")).toBe(first);
     });
 
-    it("preserves existing non-CodeSift hooks in hooks.json", async () => {
+    it("preserves existing non-CodeSift hooks and appends the gate after them", async () => {
       const configDir = join(tempHome, ".codex");
       await mkdir(configDir, { recursive: true });
       await writeFile(
@@ -1302,13 +1305,58 @@ describe("setup", () => {
 
       await setupCodexHooks();
 
-      const content = JSON.parse(await readFile(join(configDir, "hooks.json"), "utf-8"));
-      expect(content.hooks.PreToolUse).toHaveLength(1);
-      expect(content.hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
-      expect(content.hooks.Stop).toBeUndefined();
+      const hooks = await readHooks();
+      expect(hooks.PreToolUse).toHaveLength(2);
+      expect(hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
+      expect(hooks.PreToolUse[1]).toEqual(precheckEntry);
+      expect(hooks.Stop).toBeUndefined();
     });
 
-    it("removes legacy CodeSift hooks from hooks.json", async () => {
+    it("adds the gate even when the user already has an apply_patch hook of their own", async () => {
+      // Bug caught: deduping on the matcher alone would skip ours whenever someone else owns "apply_patch".
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      await writeFile(
+        join(configDir, "hooks.json"),
+        JSON.stringify({ hooks: { PreToolUse: [{ matcher: "apply_patch", hooks: [{ type: "command", command: "my-patch-hook" }] }] } }),
+        "utf-8",
+      );
+
+      await setupCodexHooks();
+
+      const commands = (await readHooks()).PreToolUse.map((e: { hooks: Array<{ command: string }> }) => e.hooks[0]?.command);
+      expect(commands).toEqual(["my-patch-hook", "codesift precheck-write --stdin"]);
+    });
+
+    it("keeps the gate in place when it sits before another hook (Codex trusts a hook by its position)", async () => {
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      const input = JSON.stringify({ hooks: { PreToolUse: [precheckEntry, { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] }] } });
+      await writeFile(join(configDir, "hooks.json"), input, "utf-8");
+
+      await setupCodexHooks();
+
+      expect((await readHooks()).PreToolUse).toEqual([precheckEntry, { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] }]);
+    });
+
+    it("leaves the gate's index alone when legacy entries sit after it, and shifts it once when they sit before it", async () => {
+      // Codex trusts a hook as `hooks.json:pre_tool_use:<index>`. Entries after the gate may go without moving it;
+      // an entry before it cannot go without moving it — documented in setupCodexHooks, so the owner re-trusts once.
+      const configDir = join(tempHome, ".codex");
+      await mkdir(configDir, { recursive: true });
+      const mine = { matcher: "Bash", hooks: [{ type: "command", command: "my-hook" }] };
+      const legacy = { matcher: "Bash", hooks: [{ type: "command", command: "codesift precheck-bash --stdin" }] };
+      await writeFile(join(configDir, "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [mine, precheckEntry, legacy] } }), "utf-8");
+
+      await setupCodexHooks();
+      expect((await readHooks()).PreToolUse).toEqual([mine, precheckEntry]);
+
+      await writeFile(join(configDir, "hooks.json"), JSON.stringify({ hooks: { PreToolUse: [legacy, mine, precheckEntry] } }), "utf-8");
+      await setupCodexHooks();
+      expect((await readHooks()).PreToolUse).toEqual([mine, precheckEntry]);
+    });
+
+    it("removes legacy CodeSift shell hooks but installs the gate", async () => {
       const configDir = join(tempHome, ".codex");
       await mkdir(configDir, { recursive: true });
       await writeFile(
@@ -1327,10 +1375,12 @@ describe("setup", () => {
 
       await setupCodexHooks();
 
-      const content = JSON.parse(await readFile(join(configDir, "hooks.json"), "utf-8"));
-      expect(content.hooks.PreToolUse).toHaveLength(1);
-      expect(content.hooks.PreToolUse[0].hooks[0].command).toBe("my-hook");
-      expect(content.hooks.Stop).toBeUndefined();
+      const hooks = await readHooks();
+      expect(hooks.PreToolUse.map((e: { hooks: Array<{ command: string }> }) => e.hooks[0]?.command)).toEqual([
+        "my-hook",
+        "codesift precheck-write --stdin",
+      ]);
+      expect(hooks.Stop).toBeUndefined();
     });
   });
 

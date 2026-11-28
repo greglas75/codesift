@@ -1,0 +1,14 @@
+{
+  "session_id": "00000000-0000-4000-8000-c41c7f66bfab",
+  "turn_id": "00000000-0000-4000-8000-a40971a3dd89",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/29/rollout-2026-11-29T00-00-33-00000000-0000-4000-8000-c41c7f66bfab.jsonl",
+  "cwd": "/work/repo",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6.2-sol",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: src/format-percent.ts\n+export const formatPercent = (n: number) => n + '%';\n*** End Patch"
+  },
+  "tool_use_id": "exec-00000000-0000-4000-8000-d0ba1e1124c1"
+}

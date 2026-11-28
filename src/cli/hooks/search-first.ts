@@ -1,7 +1,7 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync } from "node:fs";
 import { spawn } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
-import { basename, dirname, extname, join, relative, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { sqlitePathFor } from "../../storage/index-paths.js";
 import { isTestFileStrict } from "../../utils/test-file.js";
 import { CODE_EXTENSIONS, denyTool, findIndexedRepo, isCodesiftServerRunning, isPathInIndexedRepo } from "./shared.js";
@@ -20,6 +20,10 @@ import { readRawInput } from "./input.js";
  * Grep/Glob, grep/rg in Bash, an Explore agent), so the gate never demands a
  * capability the caller lacks. 2026-11-13: when ANY lookup unlocked it, the gate
  * almost never fired — agents always search for something before writing.
+ *
+ * Codex has no Write tool: it creates files through `apply_patch`, whose PreToolUse payload carries the patch in
+ * `tool_input.command`. Every `*** Add File:` of the patch is gated the same way, and the lookups are read from the
+ * Codex rollout (`transcript_path`): `McpToolCall` / `CommandExecution` items, the prompt boundary is a `UserMessage`.
  *
  * It fails OPEN everywhere: an unreadable or missing transcript, a transcript
  * too large to scan, an unknown hook payload — all allow. A false deny stops
@@ -47,7 +51,12 @@ interface TranscriptEntry {
   isCompactSummary?: unknown;
   origin?: { kind?: unknown } | null;
   message?: { content?: unknown } | null;
+  /** A Codex rollout line: `{ type: "event_msg", payload: { type: "item_completed", item } }`. */
+  payload?: { type?: unknown; item?: unknown } | null;
 }
+
+/** What one Codex rollout line says about the task window: a human prompt, a lookup, or neither. */
+type CodexEvent = { kind: "prompt" } | { kind: "tool"; name: string; input: unknown };
 
 /** File-name words too generic to say what a file does: a lookup for them proves nothing. */
 const GENERIC_WORDS: ReadonlySet<string> = new Set([
@@ -149,27 +158,71 @@ export function isHumanPrompt(entry: TranscriptEntry): boolean {
   return Array.isArray(content) && !content.some((b) => (b as { type?: unknown })?.type === "tool_result");
 }
 
-function entrySearched(entry: TranscriptEntry, terms: readonly string[]): boolean {
-  if (entry.type !== "assistant") return false;
+/** The lookups (tool_use blocks that searched the repo) of a Claude assistant record. */
+function searchesIn(entry: TranscriptEntry): Array<{ name: string; input: unknown }> {
+  if (entry.type !== "assistant") return [];
   const content = entry.message?.content;
-  if (!Array.isArray(content)) return false;
-  return content.some((block) => {
+  if (!Array.isArray(content)) return [];
+  const out: Array<{ name: string; input: unknown }> = [];
+  for (const block of content) {
     const b = block as { type?: unknown; name?: unknown; input?: unknown };
-    return b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input) &&
-      lookupNames(b.name, b.input, terms);
-  });
+    if (b?.type === "tool_use" && typeof b.name === "string" && isSearchToolUse(b.name, b.input)) out.push({ name: b.name, input: b.input });
+  }
+  return out;
 }
 
 /**
- * Walk transcript lines from the newest: a search naming one of `terms` before
- * reaching the latest human prompt → true; the prompt first → false. `null` =
- * could not tell. No `terms` (the default): any search counts.
+ * The script of `["/bin/bash", "-lc", "<script>"]` (also `-l -c`, `zsh`, `sh`): the argument after the first `-…c`
+ * flag, only when argv[0] is a shell. Any other program (`python -c`, `node -c`) keeps its whole argv as the command.
  */
-export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, terms: readonly string[] = []): boolean | null {
+function shellScript(argv: string[]): string {
+  const shell = /^(?:.*[\\/])?(?:bash|sh|zsh)$/.test(argv[0] ?? "");
+  if (shell) {
+    for (let i = 1; i < argv.length - 1; i++) {
+      const arg = argv[i] as string;
+      if (!arg.startsWith("-")) break;
+      if (/^-\w*c$/.test(arg)) return argv[i + 1] as string;
+    }
+  }
+  return argv.join(" ");
+}
+
+/**
+ * A Codex rollout line (`event_msg` / `item_completed`) as a prompt or a tool call, in the shape the Claude helpers
+ * already judge: an MCP call is `mcp__<server>__<tool>` with its arguments, a command is a `Bash` call (Codex
+ * wraps it as `["/bin/bash","-lc","<script>"]`). The model batches calls in one `exec` script, but every nested
+ * call still lands as its own item, finished before the next PreToolUse hook fires.
+ */
+export function codexEvent(entry: TranscriptEntry): CodexEvent | null {
+  if (entry.type !== "event_msg" || entry.payload?.type !== "item_completed") return null;
+  const item = entry.payload.item as Record<string, unknown> | null | undefined;
+  if (!item || typeof item !== "object") return null;
+  if (item["type"] === "UserMessage") return { kind: "prompt" };
+  if (item["type"] === "McpToolCall" && typeof item["server"] === "string" && typeof item["tool"] === "string") {
+    return { kind: "tool", name: `mcp__${item["server"]}__${item["tool"]}`, input: item["arguments"] };
+  }
+  const argv = item["command"];
+  if (item["type"] === "CommandExecution" && Array.isArray(argv) && argv.every((a) => typeof a === "string")) {
+    return { kind: "tool", name: "Bash", input: { command: shellScript(argv as string[]) } };
+  }
+  return null;
+}
+
+/** Lines worth parsing: Claude user/assistant records and the three Codex item kinds. The markers are unescaped, so they cannot occur inside text. */
+const TRANSCRIPT_MARKERS = ['"type":"user"', '"type":"assistant"', '"type":"UserMessage"', '"type":"McpToolCall"', '"type":"CommandExecution"'];
+
+/**
+ * Walk transcript lines from the newest ONCE for several term sets (one per new file): a search naming one of a set's
+ * terms before the latest human prompt → true for it; the prompt first → false; `null` = could not tell. No terms: any
+ * search counts. Reads Claude Code JSONL and Codex rollouts alike.
+ */
+export function searchedSinceLastPromptEach(linesNewestFirst: Iterable<string>, termSets: ReadonlyArray<readonly string[]>): Array<boolean | null> {
+  const result: Array<boolean | null> = termSets.map(() => null);
+  let open = termSets.map((_, i) => i);
   for (const line of linesNewestFirst) {
     // Cheap filters first: most lines are attachments, api records and huge tool results. A tool result
     // is neither a lookup nor a prompt; the unescaped marker cannot occur inside prompt text (JSON escapes it).
-    if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue;
+    if (!TRANSCRIPT_MARKERS.some((m) => line.includes(m))) continue;
     if (line.includes('"type":"tool_result"')) continue;
     let entry: TranscriptEntry;
     try {
@@ -177,10 +230,35 @@ export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, term
     } catch {
       continue;
     }
-    if (entrySearched(entry, terms)) return true;
-    if (isHumanPrompt(entry)) return false;
+    const codex = codexEvent(entry);
+    let searches: Array<{ name: string; input: unknown }>;
+    let prompt: boolean;
+    if (codex) {
+      prompt = codex.kind === "prompt";
+      searches = codex.kind === "tool" && isSearchToolUse(codex.name, codex.input) ? [codex] : [];
+    } else {
+      searches = searchesIn(entry);
+      prompt = searches.length === 0 && isHumanPrompt(entry);
+    }
+    open = open.filter((i) => {
+      if (searches.some((q) => lookupNames(q.name, q.input, termSets[i] as readonly string[]))) {
+        result[i] = true;
+        return false;
+      }
+      if (prompt) {
+        result[i] = false;
+        return false;
+      }
+      return true;
+    });
+    if (open.length === 0) break; // every file answered: do not read further back
   }
-  return null;
+  return result;
+}
+
+/** `searchedSinceLastPromptEach` for one file. */
+export function searchedSinceLastPrompt(linesNewestFirst: Iterable<string>, terms: readonly string[] = []): boolean | null {
+  return searchedSinceLastPromptEach(linesNewestFirst, [terms])[0] ?? null;
 }
 
 /** Lines of a JSONL file, newest first, read in chunks from the end. Stops at `maxBytes`. */
@@ -524,12 +602,47 @@ function denyReason(filePath: string, serverRunning: boolean, terms: readonly st
 
 interface WriteHookInput {
   filePath: string | null;
+  /** Codex `apply_patch`: every `*** Add File:` of the patch, absolute. Empty for a Claude `Write`. */
+  patchFiles: string[];
   transcriptPath: string | null;
   agentId: string | null;
 }
 
+/** Strings of a tool payload that hold a Codex patch (`tool_input.command`, or `arguments` on other builds). */
+function patchTexts(node: unknown, out: string[] = [], depth = 0): string[] {
+  if (depth > 4) return out;
+  if (typeof node === "string") {
+    if (node.includes("*** Begin Patch")) out.push(node);
+  } else if (Array.isArray(node)) {
+    for (const v of node) patchTexts(v, out, depth + 1);
+  } else if (node && typeof node === "object") {
+    for (const v of Object.values(node)) patchTexts(v, out, depth + 1);
+  }
+  return out;
+}
+
+/** The files a Codex patch creates (`*** Add File:`), resolved against the payload's `cwd`. Updates, moves and deletes are not new code. */
+export function addedFilesFromPatch(patch: string, cwd: string | null): string[] {
+  const out: string[] = [];
+  for (const match of patch.matchAll(/^\*\*\* Add File: (.+?)\s*$/gm)) {
+    const path = match[1] as string;
+    out.push(isAbsolute(path) ? path : resolve(cwd ?? process.cwd(), path));
+  }
+  return out;
+}
+
+/** A payload field some builds send as a JSON-encoded string (`"{\"command\":\"*** Begin Patch…\"}"`). */
+function decoded(value: unknown): unknown {
+  if (typeof value !== "string" || !value.trimStart().startsWith("{")) return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
 export function parseWriteHookInput(raw: string): WriteHookInput {
-  const empty: WriteHookInput = { filePath: null, transcriptPath: null, agentId: null };
+  const empty: WriteHookInput = { filePath: null, patchFiles: [], transcriptPath: null, agentId: null };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -538,15 +651,14 @@ export function parseWriteHookInput(raw: string): WriteHookInput {
   }
   if (!parsed || typeof parsed !== "object") return empty;
   const obj = parsed as Record<string, unknown>;
-  const toolInput = obj["tool_input"] && typeof obj["tool_input"] === "object"
-    ? (obj["tool_input"] as Record<string, unknown>)
-    : {};
+  const input = decoded(obj["tool_input"]);
+  const toolInput = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
   const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
-  return {
-    filePath: str(toolInput["file_path"]),
-    transcriptPath: str(obj["transcript_path"]),
-    agentId: str(obj["agent_id"]),
-  };
+  const filePath = str(toolInput["file_path"]);
+  const patchFiles = filePath
+    ? []
+    : [...new Set(patchTexts([input, decoded(obj["arguments"])]).flatMap((p) => addedFilesFromPatch(p, str(obj["cwd"]))))];
+  return { filePath, patchFiles, transcriptPath: str(obj["transcript_path"]), agentId: str(obj["agent_id"]) };
 }
 
 export async function handlePrecheckWrite(): Promise<void> {
@@ -554,15 +666,20 @@ export async function handlePrecheckWrite(): Promise<void> {
     if (process.env["CODESIFT_SEARCH_FIRST"] === "0") return process.exit(0);
     const raw = readRawInput();
     if (!raw) return process.exit(0);
-    const { filePath, transcriptPath, agentId } = parseWriteHookInput(raw);
-    if (!filePath || !transcriptPath || !isGatedNewFile(filePath) || !isPathInIndexedRepo(filePath)) {
-      return process.exit(0);
-    }
-    const transcript = transcriptFor(transcriptPath, agentId);
+    const { filePath, patchFiles, transcriptPath, agentId } = parseWriteHookInput(raw);
+    const created = (filePath ? [filePath] : patchFiles).filter((f) => isGatedNewFile(f) && isPathInIndexedRepo(f));
+    if (!transcriptPath || created.length === 0) return process.exit(0);
+    // A Codex thread's rollout is its own (subagents get theirs): only Claude keeps subagent transcripts beside the session's.
+    const transcript = filePath ? transcriptFor(transcriptPath, agentId) : transcriptPath;
     if (!transcript || !existsSync(transcript)) return process.exit(0);
-    const terms = relevantTerms(filePath);
-    if (searchedSinceLastPrompt(readLinesBackward(transcript), terms) !== false) return process.exit(0);
-    denyTool(denyReason(filePath, isCodesiftServerRunning(), terms, await existingCodeHint(filePath)));
+    // One pass over the rollout for every new file of the patch.
+    const verdicts = searchedSinceLastPromptEach(readLinesBackward(transcript), created.map(relevantTerms));
+    const unsearched = created.filter((_, i) => verdicts[i] === false);
+    const [first, ...others] = unsearched;
+    if (!first) return process.exit(0);
+    const reason = denyReason(first, isCodesiftServerRunning(), relevantTerms(first), await existingCodeHint(first));
+    const alsoNew = others.length > 0 ? `\nAlso new in this patch, not looked up yet: ${others.map((f) => JSON.stringify(basename(f))).join(", ")}.` : "";
+    denyTool(reason + alsoNew);
   } catch {
     process.exit(0);
   }
