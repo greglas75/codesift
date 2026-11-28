@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.26.6] — 2026-11-28
+
+The search-first deny now shows the code that probably already does the job.
+
+### Added
+
+- **`precheck-write` lists existing code in its deny.** Up to 3 existing files and 3 existing symbols
+  whose names match the new file's stem words, read from the repo's SQLite index (read-only, works
+  while the indexer holds it). The queries run in a child process killed after 400 ms
+  (`CODESIFT_HINT_BUDGET_MS`); a timeout or a missing/broken index gives the plain message as before,
+  with one `[codesift] existing-code hint skipped (<reason>)` line on stderr. Tests, declarations and
+  build/vendored paths are never suggested. (#116)
+
+### Changed
+
+- `sqlitePathFor` lives in the dependency-free `src/storage/index-paths.ts` (still re-exported from
+  `index-migration.ts`), so hooks share the storage layer's index path rule.
+
 ## [0.26.5] — 2026-11-14
 
 The search-first gate now asks for a lookup of the code being written, not any lookup.
